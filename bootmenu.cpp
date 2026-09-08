@@ -1,0 +1,1152 @@
+// Boot menu for ROM extraction before SpaghettiKart initialization
+// Based on 2Ship2Harkinian UWP boot menu by SternXD & worleydl
+// Uses ImGui + SDL2 + DX11
+#include "bootmenu.h"
+
+// Standard libraries
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <optional>
+#include <process.h>
+#include <string>
+#include <thread>
+#include <vector>
+
+// Platform (Windows / WinRT)
+#include <Windows.h>
+#include <io.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <winbase.h>
+#include <winrt/base.h>
+#include <winrt/Windows.ApplicationModel.h>
+#include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+
+// Third-party libraries
+#include <SDL2/SDL.h>
+#include <imgui.h>
+#include "backends/imgui_impl_sdl2.h"
+#include "backends/imgui_impl_dx11.h"
+
+// Project headers
+#include "dx11glue.h"
+
+extern "C" {
+    typedef void (*ExtractProgressCallback)(const char* message);
+    typedef void (*FnSetExtractProgressCallback)(ExtractProgressCallback callback);
+    typedef bool (*FnExtractor_ExtractMK64)(const char* romPath, const char* outDir);
+
+    __declspec(dllimport) void* uwp_GetWindowReference();
+    __declspec(dllimport) void uwp_ProcessEvents();
+}
+
+namespace bootmenu
+{
+    enum class BootState
+    {
+        Setup,
+        CheckingO2R,
+        SelectingROM,
+        Extracting,
+        ExtractionComplete,
+        ExtractionFailed,
+        Ready
+    };
+
+    enum class StorageLocation
+    {
+        LocalState,
+        DDrive,
+        EDrive
+    };
+
+    struct ExtractionState
+    {
+        std::mutex mutex;
+        std::atomic<BootState> state{ BootState::CheckingO2R };
+        std::string statusMessage;
+        std::string errorMessage;
+        std::string selectedRomPath;
+        bool extractionSuccess = false;
+        std::chrono::steady_clock::time_point extractionStartTime;
+        float progressPercent = 0.0f;
+        std::vector<std::string> logLines;
+        int currentFileIndex = 0;
+        int totalFiles = 0;
+    };
+
+    static ExtractionState g_extractionState;
+    static StorageLocation g_cachedStorageLocation = StorageLocation::DDrive;
+    static bool g_storageLocationCached = false;
+
+    namespace {
+        StorageLocation GetStorageLocation() {
+            if (g_storageLocationCached) {
+                return g_cachedStorageLocation;
+            }
+
+            try {
+                auto appData = winrt::Windows::Storage::ApplicationData::Current();
+                if (!appData) {
+                    g_cachedStorageLocation = StorageLocation::DDrive;
+                    g_storageLocationCached = true;
+                    return g_cachedStorageLocation;
+                }
+                auto localSettings = appData.LocalSettings();
+                if (!localSettings) {
+                    g_cachedStorageLocation = StorageLocation::DDrive;
+                    g_storageLocationCached = true;
+                    return g_cachedStorageLocation;
+                }
+                auto container = localSettings.Containers().TryLookup(L"Settings");
+                if (container) {
+                    auto value = container.Values().TryLookup(L"StorageLocation");
+                    if (value) {
+                        int location = value.as<int>();
+                        g_cachedStorageLocation = static_cast<StorageLocation>(location);
+                        g_storageLocationCached = true;
+                        return g_cachedStorageLocation;
+                    }
+                }
+            } catch (...) {
+            }
+            g_cachedStorageLocation = StorageLocation::DDrive;
+            g_storageLocationCached = true;
+            return g_cachedStorageLocation;
+        }
+
+        void SaveStorageLocation(StorageLocation location) {
+            g_cachedStorageLocation = location;
+            g_storageLocationCached = true;
+
+            try {
+                auto appData = winrt::Windows::Storage::ApplicationData::Current();
+                if (!appData) return;
+                auto localSettings = appData.LocalSettings();
+                if (!localSettings) return;
+                auto container = localSettings.CreateContainer(L"Settings", winrt::Windows::Storage::ApplicationDataCreateDisposition::Always);
+                if (!container) return;
+                auto propertyValue = winrt::Windows::Foundation::PropertyValue::CreateInt32(static_cast<int>(location));
+                winrt::Windows::Foundation::Collections::IPropertySet values = container.Values();
+                values.Insert(L"StorageLocation", propertyValue);
+            } catch (...) {
+            }
+        }
+
+        std::filesystem::path GetAuxRoot() {
+            StorageLocation location = GetStorageLocation();
+
+            switch (location) {
+                case StorageLocation::LocalState: {
+                    try {
+                        auto appData = winrt::Windows::Storage::ApplicationData::Current();
+                        if (!appData) return std::filesystem::path("D:/SpaghettiKart/");
+                        auto localFolder = appData.LocalFolder();
+                        if (!localFolder) return std::filesystem::path("D:/SpaghettiKart/");
+                        std::wstring localPath = localFolder.Path().c_str();
+                        std::string auxPath = std::filesystem::path(localPath).string() + "\\SpaghettiKart";
+                        return std::filesystem::path(auxPath);
+                    } catch (...) {
+                        return std::filesystem::path("D:/SpaghettiKart/");
+                    }
+                }
+                case StorageLocation::DDrive:
+                    return std::filesystem::path("D:/SpaghettiKart/");
+                case StorageLocation::EDrive:
+                    return std::filesystem::path("E:/SpaghettiKart/");
+                default:
+                    return std::filesystem::path("D:/SpaghettiKart/");
+            }
+        }
+
+        std::string GetAppBundlePath() {
+            try {
+                auto pkg = winrt::Windows::ApplicationModel::Package::Current();
+                if (pkg) {
+                    std::wstring wpath = pkg.InstalledLocation().Path().c_str();
+                    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), (int)wpath.length(), NULL, 0, NULL, NULL);
+                    std::string strTo(size_needed, 0);
+                    WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), (int)wpath.length(), &strTo[0], size_needed, NULL, NULL);
+                    return strTo;
+                }
+            } catch (...) {}
+            return ".";
+        }
+
+        std::optional<std::filesystem::path> TryGetLocalStatePath() {
+            try {
+                auto appData = winrt::Windows::Storage::ApplicationData::Current();
+                if (!appData) return std::nullopt;
+                auto folder = appData.LocalFolder();
+                if (!folder) return std::nullopt;
+                std::wstring localPath = folder.Path().c_str();
+                return std::filesystem::path(localPath);
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+
+        struct FileItem {
+            std::string name;
+            std::filesystem::path path;
+            bool isDirectory = false;
+        };
+
+        struct FileBrowserState {
+            std::filesystem::path currentPath;
+            std::vector<FileItem> items;
+            std::string selectedFile;
+            std::string errorText;
+            bool atRoot = true;
+        };
+
+        static FileBrowserState g_fileBrowser;
+
+        std::string ToLowerCopy(std::string value) {
+            std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return value;
+        }
+
+        bool IsRomExtension(const std::filesystem::path& path) {
+            const std::string ext = ToLowerCopy(path.extension().string());
+            return ext == ".z64" || ext == ".n64" || ext == ".v64" || ext == ".rom";
+        }
+
+        std::vector<FileItem> EnumerateDrives() {
+            std::vector<FileItem> drives;
+
+            if (auto localState = TryGetLocalStatePath()) {
+                std::error_code ec;
+                if (std::filesystem::exists(*localState, ec) && !ec) {
+                    FileItem item;
+                    item.name = "LocalState";
+                    item.path = *localState;
+                    item.isDirectory = true;
+                    drives.push_back(item);
+                }
+            }
+            DWORD mask = GetLogicalDrives();
+            for (char letter = 'A'; letter <= 'Z'; ++letter) {
+                if ((mask & (1 << (letter - 'A'))) == 0) continue;
+                std::string rootPath;
+                rootPath.push_back(letter);
+                rootPath += ":/";
+                std::error_code ec;
+                if (std::filesystem::exists(rootPath, ec) && !ec) {
+                    FileItem item;
+                    item.name = rootPath;
+                    item.path = rootPath;
+                    item.isDirectory = true;
+                    drives.push_back(item);
+                }
+            }
+
+            if (drives.empty()) {
+                for (const std::string& fallback : { "D:/", "E:/" }) {
+                    std::error_code ec;
+                    if (std::filesystem::exists(fallback, ec) && !ec) {
+                        FileItem item;
+                        item.name = fallback;
+                        item.path = fallback;
+                        item.isDirectory = true;
+                        drives.push_back(item);
+                    }
+                }
+            }
+
+            std::sort(drives.begin(), drives.end(), [](const FileItem& a, const FileItem& b) {
+                return ToLowerCopy(a.name) < ToLowerCopy(b.name);
+            });
+            return drives;
+        }
+
+        std::vector<FileItem> EnumerateDirectory(const std::filesystem::path& dirPath) {
+            std::vector<FileItem> items;
+            std::error_code ec;
+            std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+            for (std::filesystem::directory_iterator it(dirPath, opts, ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+                const auto& entry = *it;
+                std::error_code statusEc;
+                const bool isDir = entry.is_directory(statusEc) && !statusEc;
+                const bool isFile = entry.is_regular_file(statusEc) && !statusEc;
+                if (!isDir && !isFile) continue;
+
+                FileItem item;
+                item.name = entry.path().filename().string();
+                item.path = entry.path();
+                item.isDirectory = isDir;
+
+                if (item.isDirectory || (isFile && IsRomExtension(entry.path()))) {
+                    items.push_back(item);
+                }
+            }
+
+            std::sort(items.begin(), items.end(), [](const FileItem& a, const FileItem& b) {
+                if (a.isDirectory != b.isDirectory) {
+                    return a.isDirectory && !b.isDirectory;
+                }
+                return ToLowerCopy(a.name) < ToLowerCopy(b.name);
+            });
+
+            return items;
+        }
+
+        void RefreshFileBrowser(FileBrowserState& state) {
+            state.errorText.clear();
+            try {
+                state.items = state.atRoot ? EnumerateDrives() : EnumerateDirectory(state.currentPath);
+            } catch (const std::exception& e) {
+                state.items.clear();
+                state.errorText = e.what();
+            } catch (...) {
+                state.items.clear();
+                state.errorText = "Unable to read directory.";
+            }
+        }
+
+        void ResetFileBrowser(FileBrowserState& state) {
+            state.atRoot = true;
+            state.currentPath.clear();
+            state.selectedFile.clear();
+            state.errorText.clear();
+            RefreshFileBrowser(state);
+        }
+
+        void EnterDirectory(FileBrowserState& state, const std::filesystem::path& dirPath) {
+            state.atRoot = false;
+            state.currentPath = dirPath;
+            state.selectedFile.clear();
+            RefreshFileBrowser(state);
+        }
+
+        void GoUpOne(FileBrowserState& state) {
+            if (state.atRoot) return;
+            std::filesystem::path parent = state.currentPath.parent_path();
+            if (parent.empty() || parent == state.currentPath) {
+                state.atRoot = true;
+                state.currentPath.clear();
+            } else {
+                state.currentPath = parent;
+            }
+            state.selectedFile.clear();
+            RefreshFileBrowser(state);
+        }
+    }
+
+    static void LogBootmenu(const std::string& msg) {
+        try {
+            auto appData = winrt::Windows::Storage::ApplicationData::Current();
+            if (appData) {
+                auto localFolder = appData.LocalFolder();
+                if (localFolder) {
+                    std::filesystem::path logFile = std::filesystem::path(localFolder.Path().c_str()) / "launch.log";
+                    std::ofstream out(logFile, std::ios::app);
+                    out << "[Extraction] " << msg << "\n";
+                    out.flush();
+                }
+            }
+        } catch (...) {}
+    }
+
+    void ExtractProgressCallbackImpl(const char* message) {
+        if (!message) return;
+        LogBootmenu(message);
+
+        std::lock_guard<std::mutex> lock(g_extractionState.mutex);
+
+        int current = 0, total = 0;
+        if (sscanf_s(message, "(%d / %d):", &current, &total) == 2 || 
+            sscanf_s(message, "(%d/%d):", &current, &total) == 2) {
+            if (total > 0 && current > 0 && current <= total) {
+                g_extractionState.currentFileIndex = current;
+                g_extractionState.totalFiles = total;
+                g_extractionState.progressPercent = (static_cast<float>(current) / static_cast<float>(total)) * 100.0f;
+            }
+        }
+
+        g_extractionState.logLines.push_back(message);
+        if (g_extractionState.logLines.size() > 500) {
+            g_extractionState.logLines.erase(g_extractionState.logLines.begin(),
+                g_extractionState.logLines.begin() + (g_extractionState.logLines.size() - 500));
+        }
+    }
+
+    static DWORD SEHFilter(EXCEPTION_POINTERS* ep, DWORD* outCode, void** outAddr) {
+        if (ep && ep->ExceptionRecord) {
+            if (outCode) *outCode = ep->ExceptionRecord->ExceptionCode;
+            if (outAddr) *outAddr = ep->ExceptionRecord->ExceptionAddress;
+        }
+        return EXCEPTION_EXECUTE_HANDLER;
+    }
+
+    static void SafeSetCallbackSEH(FnSetExtractProgressCallback pfn, ExtractProgressCallback cb) {
+        __try {
+            if (pfn) pfn(cb);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+
+    static bool InvokeExtractMK64SEH(FnExtractor_ExtractMK64 pfnExtract, const char* romPath, const char* outDir, DWORD* outExceptionCode, void** outExceptionAddr) {
+        __try {
+            return pfnExtract(romPath, outDir);
+        }
+        __except (SEHFilter(GetExceptionInformation(), outExceptionCode, outExceptionAddr)) {
+            return false;
+        }
+    }
+
+    void ExtractionThreadWorker(const std::string& romPath, const std::string& installPath, const std::string& auxRoot)
+    {
+        auto AddLog = [](const std::string& msg) {
+            LogBootmenu(msg);
+            std::lock_guard<std::mutex> lock(g_extractionState.mutex);
+            g_extractionState.logLines.push_back(msg);
+            if (g_extractionState.logLines.size() > 100) {
+                g_extractionState.logLines.erase(g_extractionState.logLines.begin());
+            }
+        };
+
+        {
+            std::lock_guard<std::mutex> lock(g_extractionState.mutex);
+            g_extractionState.state = BootState::Extracting;
+            g_extractionState.progressPercent = 0.0f;
+            g_extractionState.currentFileIndex = 0;
+            g_extractionState.totalFiles = 0;
+            g_extractionState.extractionStartTime = std::chrono::steady_clock::now();
+        }
+        AddLog("Initializing SpaghettiKart extraction...");
+        AddLog("ROM path: " + romPath);
+        AddLog("Bundle path: " + installPath);
+        AddLog("Output directory: " + auxRoot);
+
+        // Pre-check config.yml existence
+        std::filesystem::path cfgPath = std::filesystem::path(installPath) / "config.yml";
+        std::error_code ecCheck;
+        if (!std::filesystem::exists(cfgPath, ecCheck)) {
+            AddLog("Warning: config.yml not found in bundle: " + cfgPath.string());
+        } else {
+            AddLog("Found config.yml in bundle.");
+        }
+
+        // Dynamically resolve Spaghettify.dll
+        HMODULE hSpaghettify = GetModuleHandleW(L"Spaghettify.dll");
+        if (!hSpaghettify) {
+            hSpaghettify = LoadPackagedLibrary(L"Spaghettify.dll", 0);
+        }
+        if (!hSpaghettify) {
+            DWORD err = GetLastError();
+            AddLog("ERROR: Spaghettify.dll could not be loaded! (Error: " + std::to_string(err) + ")");
+            AddLog("Please check launch.log in LocalState for missing DLL imports.");
+            {
+                std::lock_guard<std::mutex> lock(g_extractionState.mutex);
+                g_extractionState.state = BootState::ExtractionFailed;
+                g_extractionState.errorMessage = "Failed to load Spaghettify.dll (Error " + std::to_string(err) + "). Check launch.log.";
+            }
+            return;
+        }
+
+        auto pfnSetCallback = reinterpret_cast<FnSetExtractProgressCallback>(GetProcAddress(hSpaghettify, "SetExtractProgressCallback"));
+        auto pfnExtract = reinterpret_cast<FnExtractor_ExtractMK64>(GetProcAddress(hSpaghettify, "Extractor_ExtractMK64"));
+
+        if (!pfnExtract) {
+            AddLog("ERROR: Extractor_ExtractMK64 symbol not found in Spaghettify.dll!");
+            {
+                std::lock_guard<std::mutex> lock(g_extractionState.mutex);
+                g_extractionState.state = BootState::ExtractionFailed;
+                g_extractionState.errorMessage = "Extractor symbol not found in Spaghettify.dll";
+            }
+            return;
+        }
+
+        SafeSetCallbackSEH(pfnSetCallback, ExtractProgressCallbackImpl);
+
+        bool success = false;
+        std::string errorDetails;
+        DWORD sehCode = 0;
+        void* sehAddr = nullptr;
+
+        try {
+            success = InvokeExtractMK64SEH(pfnExtract, romPath.c_str(), auxRoot.c_str(), &sehCode, &sehAddr);
+            if (!success && sehCode != 0) {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "Fatal SEH exception 0x%08X at %p", sehCode, sehAddr);
+                errorDetails = buf;
+                AddLog(errorDetails);
+            }
+        } catch (const std::runtime_error& e) {
+            errorDetails = std::string("Runtime error: ") + e.what();
+            AddLog(errorDetails);
+            success = false;
+        } catch (const std::exception& e) {
+            errorDetails = std::string("Exception: ") + e.what();
+            AddLog(errorDetails);
+            success = false;
+        } catch (...) {
+            errorDetails = "Unknown exception occurred during extraction";
+            AddLog(errorDetails);
+            success = false;
+        }
+
+        // Copy spaghetti.o2r from app package bundle to auxRoot if available
+        try {
+            std::filesystem::path bundleSpaghetti = std::filesystem::path(installPath) / "spaghetti.o2r";
+            std::filesystem::path auxSpaghetti = std::filesystem::path(auxRoot) / "spaghetti.o2r";
+            if (std::filesystem::exists(bundleSpaghetti) && !std::filesystem::exists(auxSpaghetti)) {
+                AddLog("Copying spaghetti.o2r to storage directory...");
+                std::filesystem::copy_file(bundleSpaghetti, auxSpaghetti, std::filesystem::copy_options::overwrite_existing);
+            }
+        } catch (...) {
+            AddLog("Notice: spaghetti.o2r copy note (non-critical).");
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        std::string completionMessage;
+        {
+            std::lock_guard<std::mutex> lock(g_extractionState.mutex);
+            g_extractionState.progressPercent = 100.0f;
+            g_extractionState.extractionSuccess = success;
+
+            if (success) {
+                const std::filesystem::path mk64O2rPath = std::filesystem::path(auxRoot) / "mk64.o2r";
+                if (std::filesystem::exists(mk64O2rPath)) {
+                    const auto o2rSize = std::filesystem::file_size(mk64O2rPath);
+                    if (o2rSize >= 1024 * 1024) {
+                        g_extractionState.state = BootState::ExtractionComplete;
+                        completionMessage = "Extraction completed successfully!";
+                    } else {
+                        g_extractionState.state = BootState::ExtractionFailed;
+                        g_extractionState.errorMessage = "Generated mk64.o2r file is too small. Please try again.";
+                        completionMessage = g_extractionState.errorMessage;
+                    }
+                } else {
+                    g_extractionState.state = BootState::ExtractionFailed;
+                    g_extractionState.errorMessage = "No mk64.o2r was produced. Please try again.";
+                    completionMessage = g_extractionState.errorMessage;
+                }
+            } else {
+                g_extractionState.state = BootState::ExtractionFailed;
+                if (!errorDetails.empty()) {
+                    g_extractionState.errorMessage = "Extraction failed: " + errorDetails;
+                } else {
+                    g_extractionState.errorMessage = "Extraction failed. Please check the logs for details.";
+                }
+                completionMessage = g_extractionState.errorMessage;
+            }
+        }
+
+        SafeSetCallbackSEH(pfnSetCallback, nullptr);
+        AddLog(completionMessage);
+    }
+
+    bool BootSelect(void* wnd, int w, int h)
+    {
+        ImVec4 clear_color = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
+
+        SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER);
+
+        SDL_Window* window = SDL_CreateWindow("SpaghettiKart - Boot Menu",
+            SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, w, h, SDL_WINDOW_RESIZABLE);
+        SDL_ShowWindow(window);
+
+        if (!dx11glue::CreateDeviceD3D(wnd, w, h)) {
+            dx11glue::CleanupDeviceD3D();
+            return false;
+        }
+
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGui::StyleColorsDark();
+
+        ImGuiStyle& style = ImGui::GetStyle();
+        style.WindowRounding = 10.0f;
+        style.ChildRounding = 10.0f;
+        style.FrameRounding = 8.0f;
+        style.GrabRounding = 8.0f;
+        style.TabRounding = 6.0f;
+        style.TabBorderSize = 0.0f;
+        style.ScrollbarRounding = 8.0f;
+        style.WindowPadding = ImVec2(20.0f, 20.0f);
+        style.FramePadding = ImVec2(16.0f, 10.0f);
+        style.ItemSpacing = ImVec2(12.0f, 10.0f);
+        style.ItemInnerSpacing = ImVec2(10.0f, 8.0f);
+        style.IndentSpacing = 25.0f;
+        style.ScrollbarSize = 16.0f;
+        style.GrabMinSize = 12.0f;
+        style.WindowBorderSize = 0.0f;
+        style.FrameBorderSize = 0.0f;
+        style.PopupBorderSize = 1.0f;
+
+        ImVec4* colors = style.Colors;
+        colors[ImGuiCol_WindowBg] = ImVec4(0.10f, 0.10f, 0.12f, 0.98f);
+        colors[ImGuiCol_ChildBg] = ImVec4(0.12f, 0.12f, 0.14f, 0.96f);
+        colors[ImGuiCol_PopupBg] = ImVec4(0.12f, 0.12f, 0.14f, 0.98f);
+        colors[ImGuiCol_Button] = ImVec4(0.85f, 0.20f, 0.20f, 0.70f); // Red tone for Mario Kart
+        colors[ImGuiCol_ButtonHovered] = ImVec4(0.95f, 0.30f, 0.30f, 1.00f);
+        colors[ImGuiCol_ButtonActive] = ImVec4(0.75f, 0.15f, 0.15f, 1.00f);
+        colors[ImGuiCol_Tab] = ImVec4(0.18f, 0.18f, 0.20f, 1.00f);
+        colors[ImGuiCol_TabHovered] = ImVec4(0.25f, 0.25f, 0.27f, 1.00f);
+        colors[ImGuiCol_TabActive] = ImVec4(0.12f, 0.12f, 0.14f, 1.00f);
+        colors[ImGuiCol_TabUnfocused] = ImVec4(0.18f, 0.18f, 0.20f, 1.00f);
+        colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.12f, 0.12f, 0.14f, 1.00f);
+        colors[ImGuiCol_Border] = ImVec4(0.85f, 0.30f, 0.30f, 0.60f);
+        colors[ImGuiCol_Separator] = ImVec4(0.30f, 0.30f, 0.35f, 0.50f);
+        colors[ImGuiCol_SeparatorHovered] = ImVec4(0.35f, 0.35f, 0.40f, 0.70f);
+        colors[ImGuiCol_SeparatorActive] = ImVec4(0.40f, 0.40f, 0.45f, 0.90f);
+        colors[ImGuiCol_Header] = ImVec4(0.85f, 0.25f, 0.25f, 0.40f);
+        colors[ImGuiCol_HeaderHovered] = ImVec4(0.90f, 0.35f, 0.35f, 0.70f);
+        colors[ImGuiCol_HeaderActive] = ImVec4(0.80f, 0.20f, 0.20f, 1.00f);
+        colors[ImGuiCol_Text] = ImVec4(0.95f, 0.95f, 0.97f, 1.00f);
+        colors[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.50f, 0.52f, 1.00f);
+        colors[ImGuiCol_PlotHistogram] = ImVec4(0.85f, 0.20f, 0.20f, 1.00f);
+        colors[ImGuiCol_FrameBg] = ImVec4(0.15f, 0.15f, 0.17f, 1.00f);
+        colors[ImGuiCol_FrameBgHovered] = ImVec4(0.18f, 0.18f, 0.20f, 1.00f);
+        colors[ImGuiCol_FrameBgActive] = ImVec4(0.20f, 0.20f, 0.22f, 1.00f);
+
+        ImGui_ImplSDL2_InitForD3D(window);
+        ImGui_ImplDX11_Init(dx11glue::g_pd3dDevice, dx11glue::g_pd3dDeviceContext);
+
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize.x = static_cast<float>(w);
+        io.DisplaySize.y = static_cast<float>(h);
+
+        ImFontConfig fontCfg;
+        fontCfg.OversampleH = 1;
+        fontCfg.OversampleV = 1;
+        fontCfg.PixelSnapH = true;
+        fontCfg.SizePixels = 18.0f;
+        io.Fonts->AddFontDefault(&fontCfg);
+
+        io.FontGlobalScale = (std::max)(1.0f, static_cast<float>(h) / 900.0f);
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
+
+        bool hasStorageConfig = false;
+        try {
+            auto appData = winrt::Windows::Storage::ApplicationData::Current();
+            if (appData) {
+                auto localSettings = appData.LocalSettings();
+                if (localSettings) {
+                    auto container = localSettings.Containers().TryLookup(L"Settings");
+                    if (container) {
+                        auto value = container.Values().TryLookup(L"StorageLocation");
+                        hasStorageConfig = (value != nullptr);
+                    }
+                }
+            }
+        } catch (...) {
+            hasStorageConfig = false;
+        }
+
+        if (!hasStorageConfig) {
+            g_extractionState.state = BootState::Setup;
+        } else {
+            auto auxRoot = GetAuxRoot();
+            std::error_code ec;
+            std::filesystem::create_directories(auxRoot, ec);
+            const std::filesystem::path mk64O2rPath = auxRoot / "mk64.o2r";
+
+            if (std::filesystem::exists(mk64O2rPath, ec)) {
+                g_extractionState.state = BootState::Ready;
+            } else {
+                g_extractionState.state = BootState::SelectingROM;
+            }
+        }
+
+        std::thread extractionThread;
+        bool extractionThreadStarted = false;
+        bool running = true;
+        bool shouldContinue = false;
+        BootState previousState = BootState::Setup;
+
+        while (running)
+        {
+            SDL_Event event;
+            while (SDL_PollEvent(&event))
+            {
+                ImGui_ImplSDL2_ProcessEvent(&event);
+                if (event.type == SDL_QUIT) {
+                    running = false;
+                }
+            }
+
+            ImGui_ImplDX11_NewFrame();
+            ImGui_ImplSDL2_NewFrame();
+            io.DisplaySize.x = static_cast<float>(w);
+            io.DisplaySize.y = static_cast<float>(h);
+
+            ImGui::NewFrame();
+
+            ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+            ImGui::SetNextWindowSize(ImVec2(static_cast<float>(w), static_cast<float>(h)), ImGuiCond_FirstUseEver);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+            {
+                ImGui::Begin("SpaghettiKart Boot Menu", 0, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
+
+                const float contentWidth = 900.0f;
+                const float contentHeight = 650.0f;
+                float startY = (h - contentHeight) * 0.5f;
+                ImGui::SetCursorPosY(startY);
+                ImGui::SetCursorPosX((w - contentWidth) * 0.5f);
+                ImGui::BeginChild("Content", ImVec2(contentWidth, contentHeight), true, ImGuiWindowFlags_None);
+
+                BootState currentStateForTabs;
+                {
+                    std::lock_guard<std::mutex> lock(g_extractionState.mutex);
+                    currentStateForTabs = g_extractionState.state;
+                }
+
+                static int selectedTab = 0;
+                bool isExtracting = (currentStateForTabs == BootState::Extracting);
+                if (isExtracting) {
+                    selectedTab = 0;
+                }
+
+                ImGui::PushStyleVar(ImGuiStyleVar_TabBarBorderSize, 1.0f);
+                ImGuiTabBarFlags tabBarFlags = ImGuiTabBarFlags_NoTabListScrollingButtons | ImGuiTabBarFlags_FittingPolicyResizeDown;
+
+                if (ImGui::BeginTabBar("MainTabs", tabBarFlags))
+                {
+                    if (isExtracting) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.6f);
+
+                    if (ImGui::BeginTabItem("Main")) {
+                        if (!isExtracting) selectedTab = 0;
+                        ImGui::EndTabItem();
+                    }
+
+                    if (ImGui::BeginTabItem("About")) {
+                        if (!isExtracting) selectedTab = 1;
+                        else selectedTab = 0;
+                        ImGui::EndTabItem();
+                    }
+
+                    if (isExtracting) ImGui::PopStyleVar();
+                    ImGui::EndTabBar();
+                }
+                ImGui::PopStyleVar();
+
+                ImGui::Spacing();
+
+                BootState currentState = previousState;
+                std::string errorMsg;
+                float progressPercent = 0.0f;
+                bool enteringSelecting = false;
+
+                if (selectedTab == 0)
+                {
+                    {
+                        std::lock_guard<std::mutex> lock(g_extractionState.mutex);
+                        currentState = g_extractionState.state;
+                        errorMsg = g_extractionState.errorMessage;
+                        progressPercent = g_extractionState.progressPercent;
+                    }
+
+                    enteringSelecting = (currentState == BootState::SelectingROM && previousState != BootState::SelectingROM);
+
+                    ImGui::SetCursorPosX((contentWidth - ImGui::CalcTextSize("SpaghettiKart").x) * 0.5f);
+                    ImGui::Text("SpaghettiKart");
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::Spacing();
+
+                    switch (currentState)
+                    {
+                    case BootState::Setup:
+                    {
+                        ImGui::SetCursorPosX((contentWidth - ImGui::CalcTextSize("Storage Location Setup").x) * 0.5f);
+                        ImGui::Text("Storage Location Setup");
+                        ImGui::Spacing();
+                        ImGui::Separator();
+                        ImGui::Spacing();
+
+                        ImGui::SetCursorPosX((contentWidth - ImGui::CalcTextSize("Choose where game files will be stored:").x) * 0.5f);
+                        ImGui::TextWrapped("Choose where game files will be stored:");
+                        ImGui::Spacing();
+                        ImGui::Spacing();
+
+                        static int selectedLocation = static_cast<int>(StorageLocation::DDrive);
+                        const float radioWidth = 450.0f;
+
+                        ImGui::SetCursorPosX((contentWidth - radioWidth) * 0.5f);
+                        ImGui::RadioButton("LocalState (App Data Folder)", &selectedLocation, static_cast<int>(StorageLocation::LocalState));
+                        ImGui::SetCursorPosX((contentWidth - radioWidth) * 0.5f);
+                        ImGui::TextWrapped("  Stores files in the app's local data folder");
+                        ImGui::Spacing();
+
+                        ImGui::SetCursorPosX((contentWidth - radioWidth) * 0.5f);
+                        ImGui::RadioButton("D:\\SpaghettiKart\\ (Internal Drive)", &selectedLocation, static_cast<int>(StorageLocation::DDrive));
+                        ImGui::SetCursorPosX((contentWidth - radioWidth) * 0.5f);
+                        ImGui::TextWrapped("  Stores files on D: drive (recommended for internal storage)");
+                        ImGui::Spacing();
+
+                        ImGui::SetCursorPosX((contentWidth - radioWidth) * 0.5f);
+                        ImGui::RadioButton("E:\\SpaghettiKart\\ (USB/External Drive)", &selectedLocation, static_cast<int>(StorageLocation::EDrive));
+                        ImGui::SetCursorPosX((contentWidth - radioWidth) * 0.5f);
+                        ImGui::TextWrapped("  Stores files on E: drive (for USB/external storage)");
+                        ImGui::Spacing();
+                        ImGui::Spacing();
+
+                        const float buttonWidth = 200.0f;
+                        const float buttonHeight = 45.0f;
+                        ImGui::SetCursorPosX((contentWidth - buttonWidth) * 0.5f);
+                        if (ImGui::Button("Continue", ImVec2(buttonWidth, buttonHeight))) {
+                            SaveStorageLocation(static_cast<StorageLocation>(selectedLocation));
+                            auto auxRoot = GetAuxRoot();
+                            std::error_code ec;
+                            std::filesystem::create_directories(auxRoot, ec);
+                            const std::filesystem::path mk64O2rPath = auxRoot / "mk64.o2r";
+
+                            if (std::filesystem::exists(mk64O2rPath, ec)) {
+                                g_extractionState.state = BootState::Ready;
+                            } else {
+                                g_extractionState.state = BootState::SelectingROM;
+                            }
+                        }
+                        break;
+                    }
+
+                    case BootState::CheckingO2R:
+                        ImGui::Text("Checking for game assets...");
+                        break;
+
+                    case BootState::SelectingROM:
+                    {
+                        if (enteringSelecting) {
+                            ResetFileBrowser(g_fileBrowser);
+                        }
+
+                        ImGui::SetCursorPosX((contentWidth - ImGui::CalcTextSize("Game assets not found. Please select a ROM file to extract assets.").x) * 0.5f);
+                        ImGui::TextWrapped("Game assets not found. Please select a ROM file to extract assets.");
+                        ImGui::Spacing();
+                        ImGui::Spacing();
+
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.80f, 0.80f, 0.85f, 1.0f));
+                        ImGui::TextWrapped("Choose a Mario Kart 64 (US) ROM (.z64/.n64/.v64). Directories are listed first.");
+                        ImGui::PopStyleColor();
+                        ImGui::Spacing();
+
+                        const float buttonWidth = 220.0f;
+                        const float buttonHeight = 45.0f;
+                        ImGui::SetCursorPosX((contentWidth - buttonWidth) * 0.5f);
+                        if (ImGui::Button("Select ROM File", ImVec2(buttonWidth, buttonHeight))) {
+                            ImGui::OpenPopup("ROM Picker");
+                        }
+
+                        bool popupOpen = true;
+                        if (ImGui::IsPopupOpen("ROM Picker")) {
+                            const ImGuiViewport* vp = ImGui::GetMainViewport();
+                            ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+                            ImGui::SetNextWindowSize(ImVec2(820.0f, 640.0f), ImGuiCond_Always);
+                        }
+                        if (ImGui::BeginPopupModal("ROM Picker", &popupOpen, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize)) {
+                            ImGui::TextWrapped("Select your Mario Kart 64 ROM. Drives and folders are shown on the left; only ROM extensions are selectable as files.");
+                            ImGui::Spacing();
+
+                            const std::string locationLabel = g_fileBrowser.atRoot ? std::string("Location: Drives") : std::string("Location: ") + g_fileBrowser.currentPath.string();
+                            ImGui::TextWrapped("%s", locationLabel.c_str());
+                            ImGui::Spacing();
+
+                            const float navWidth = 420.0f;
+                            ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - navWidth) * 0.5f);
+                            const bool canGoUp = !g_fileBrowser.atRoot;
+                            if (!canGoUp) ImGui::BeginDisabled();
+                            if (ImGui::Button("Up")) GoUpOne(g_fileBrowser);
+                            if (!canGoUp) ImGui::EndDisabled();
+                            ImGui::SameLine();
+                            if (ImGui::Button("Back to Drives")) ResetFileBrowser(g_fileBrowser);
+                            ImGui::SameLine();
+                            if (ImGui::Button("Refresh")) RefreshFileBrowser(g_fileBrowser);
+
+                            ImGui::Spacing();
+                            ImGui::BeginChild("RomBrowserModal", ImVec2(-FLT_MIN, 340.0f), true, ImGuiWindowFlags_None);
+                            bool parentClicked = false;
+                            if (!g_fileBrowser.atRoot) {
+                                parentClicked = ImGui::Selectable("<Parent Directory>", false);
+                            }
+
+                            auto itemsCopy = g_fileBrowser.items;
+                            std::optional<std::filesystem::path> directoryToEnter;
+                            for (const auto& item : itemsCopy) {
+                                std::string label = item.isDirectory ? std::string("[DIR] ") + item.name : item.name;
+                                const bool isSelected = (!item.isDirectory && g_fileBrowser.selectedFile == item.path.string());
+                                if (ImGui::Selectable(label.c_str(), isSelected)) {
+                                    if (item.isDirectory) {
+                                        directoryToEnter = item.path;
+                                    } else {
+                                        g_fileBrowser.selectedFile = item.path.string();
+                                        g_fileBrowser.errorText.clear();
+                                    }
+                                }
+                            }
+
+                            if (g_fileBrowser.items.empty()) {
+                                ImGui::TextDisabled("No items to display here.");
+                            }
+                            ImGui::EndChild();
+
+                            if (parentClicked) GoUpOne(g_fileBrowser);
+                            if (directoryToEnter.has_value()) EnterDirectory(g_fileBrowser, *directoryToEnter);
+
+                            ImGui::Spacing();
+                            if (!g_fileBrowser.errorText.empty()) {
+                                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.45f, 0.45f, 1.0f));
+                                ImGui::TextWrapped("%s", g_fileBrowser.errorText.c_str());
+                                ImGui::PopStyleColor();
+                                ImGui::Spacing();
+                            }
+
+                            const std::string selectedLabel = g_fileBrowser.selectedFile.empty() ? std::string("Selected: None") : std::string("Selected: ") + g_fileBrowser.selectedFile;
+                            ImGui::TextWrapped("%s", selectedLabel.c_str());
+                            ImGui::Spacing();
+
+                            ImGui::BeginGroup();
+                            if (ImGui::Button("Use Selected ROM", ImVec2(200.0f, 40.0f))) {
+                                if (g_fileBrowser.selectedFile.empty()) {
+                                    g_fileBrowser.errorText = "Select a ROM to continue.";
+                                } else if (!std::filesystem::exists(g_fileBrowser.selectedFile)) {
+                                    g_fileBrowser.errorText = "Selected ROM file does not exist.";
+                                } else if (!extractionThreadStarted) {
+                                    {
+                                        std::lock_guard<std::mutex> lock(g_extractionState.mutex);
+                                        g_extractionState.selectedRomPath = g_fileBrowser.selectedFile;
+                                    }
+                                    const std::string installPath = GetAppBundlePath();
+                                    auto auxRoot = GetAuxRoot();
+                                    extractionThread = std::thread(ExtractionThreadWorker, g_fileBrowser.selectedFile, installPath, auxRoot.string());
+                                    extractionThreadStarted = true;
+                                    ImGui::CloseCurrentPopup();
+                                }
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::Button("Cancel", ImVec2(140.0f, 40.0f))) {
+                                ImGui::CloseCurrentPopup();
+                            }
+                            ImGui::EndGroup();
+
+                            ImGui::EndPopup();
+                        }
+
+                        if (!popupOpen) {
+                            ImGui::CloseCurrentPopup();
+                        }
+                        break;
+                    }
+
+                    case BootState::Extracting:
+                    {
+                        {
+                            std::lock_guard<std::mutex> lock(g_extractionState.mutex);
+                            if (g_extractionState.totalFiles == 0) {
+                                auto elapsed = std::chrono::steady_clock::now() - g_extractionState.extractionStartTime;
+                                auto elapsedSeconds = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
+                                float timeProgress = (std::min)(95.0f, 5.0f + (elapsedSeconds / 60.0f) * 90.0f);
+                                if (progressPercent < timeProgress) {
+                                    progressPercent = timeProgress;
+                                }
+                            }
+                        }
+
+                        ImGui::SetCursorPosX((contentWidth - ImGui::CalcTextSize("Extracting Mario Kart 64 assets...").x) * 0.5f);
+                        ImGui::TextWrapped("Extracting Mario Kart 64 assets...");
+                        ImGui::Spacing();
+                        ImGui::Spacing();
+
+                        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.85f, 0.20f, 0.20f, 1.0f));
+                        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+                        const float progressBarWidth = 550.0f;
+                        ImGui::SetCursorPosX((contentWidth - progressBarWidth) * 0.5f);
+                        ImGui::ProgressBar(progressPercent / 100.0f, ImVec2(progressBarWidth, 35.0f), "");
+                        ImGui::PopStyleColor(2);
+
+                        ImGui::Spacing();
+
+                        char progressText[32];
+                        snprintf(progressText, sizeof(progressText), "%.0f%%", progressPercent);
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.7f, 0.7f, 1.0f));
+                        ImGui::SetCursorPosX((contentWidth - ImGui::CalcTextSize(progressText).x) * 0.5f);
+                        ImGui::Text("%s", progressText);
+                        ImGui::PopStyleColor();
+
+                        ImGui::Spacing();
+                        ImGui::Spacing();
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.85f, 0.87f, 1.0f));
+                        ImGui::Text("Details:");
+                        ImGui::PopStyleColor();
+                        ImGui::Spacing();
+
+                        ImGuiWindowFlags logFlags = ImGuiWindowFlags_None;
+                        if (currentState == BootState::Extracting) {
+                            logFlags |= ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+                        }
+                        ImGui::BeginChild("Log", ImVec2(0, 280), true, logFlags);
+                        {
+                            std::vector<std::string> logLinesCopy;
+                            {
+                                std::lock_guard<std::mutex> lock(g_extractionState.mutex);
+                                logLinesCopy = g_extractionState.logLines;
+                            }
+
+                            if (logLinesCopy.empty()) {
+                                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.60f, 0.60f, 0.65f, 1.0f));
+                                ImGui::TextWrapped("Waiting for extraction output...");
+                                ImGui::PopStyleColor();
+                            } else {
+                                for (size_t i = 0; i < logLinesCopy.size(); ++i) {
+                                    const auto& line = logLinesCopy[i];
+                                    if (line.empty()) continue;
+                                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.88f, 0.88f, 0.90f, 1.0f));
+                                    ImGui::TextUnformatted(line.c_str());
+                                    ImGui::PopStyleColor();
+                                }
+                                if (currentState == BootState::Extracting && !logLinesCopy.empty()) {
+                                    ImGui::SetScrollHereY(1.0f);
+                                }
+                            }
+                        }
+                        ImGui::EndChild();
+                        break;
+                    }
+
+                    case BootState::ExtractionComplete:
+                    {
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.9f, 0.4f, 1.0f));
+                        ImGui::SetCursorPosX((contentWidth - ImGui::CalcTextSize("Asset extraction completed successfully!").x) * 0.5f);
+                        ImGui::TextWrapped("Asset extraction completed successfully!");
+                        ImGui::PopStyleColor();
+                        ImGui::Spacing();
+                        ImGui::Spacing();
+
+                        const float buttonWidth = 220.0f;
+                        const float buttonHeight = 45.0f;
+                        ImGui::SetCursorPosX((contentWidth - buttonWidth) * 0.5f);
+
+                        if (ImGui::Button("Continue to Game", ImVec2(buttonWidth, buttonHeight))) {
+                            shouldContinue = true;
+                            running = false;
+                        }
+                        break;
+                    }
+
+                    case BootState::ExtractionFailed:
+                    {
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.45f, 0.45f, 1.0f));
+                        ImGui::SetCursorPosX((contentWidth - ImGui::CalcTextSize("Extraction Failed").x) * 0.5f);
+                        ImGui::Text("Extraction Failed");
+                        ImGui::PopStyleColor();
+                        ImGui::Spacing();
+
+                        if (!errorMsg.empty()) {
+                            ImGui::SetCursorPosX((contentWidth - ImGui::CalcTextSize(errorMsg.c_str()).x) * 0.5f);
+                            ImGui::TextWrapped("%s", errorMsg.c_str());
+                        }
+
+                        ImGui::Spacing();
+                        ImGui::Spacing();
+
+                        const float buttonWidth2 = 160.0f;
+                        const float buttonHeight2 = 40.0f;
+                        ImGui::SetCursorPosX((contentWidth - (buttonWidth2 * 2 + 20.0f)) * 0.5f);
+
+                        if (ImGui::Button("Try Again", ImVec2(buttonWidth2, buttonHeight2))) {
+                            {
+                                std::lock_guard<std::mutex> lock(g_extractionState.mutex);
+                                g_extractionState.state = BootState::SelectingROM;
+                                g_extractionState.errorMessage.clear();
+                            }
+                            extractionThreadStarted = false;
+                        }
+
+                        ImGui::SameLine();
+                        ImGui::Spacing();
+                        ImGui::SameLine();
+
+                        if (ImGui::Button("Exit", ImVec2(buttonWidth2, buttonHeight2))) {
+                            running = false;
+                        }
+                        break;
+                    }
+
+                    case BootState::Ready:
+                    {
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.9f, 0.4f, 1.0f));
+                        ImGui::SetCursorPosX((contentWidth - ImGui::CalcTextSize("Game assets found. Ready to launch!").x) * 0.5f);
+                        ImGui::TextWrapped("Game assets found. Ready to launch!");
+                        ImGui::PopStyleColor();
+                        ImGui::Spacing();
+                        ImGui::Spacing();
+
+                        const float buttonWidth3 = 220.0f;
+                        const float buttonHeight3 = 45.0f;
+                        ImGui::SetCursorPosX((contentWidth - buttonWidth3) * 0.5f);
+                        if (ImGui::Button("Launch Game", ImVec2(buttonWidth3, buttonHeight3))) {
+                            shouldContinue = true;
+                            running = false;
+                        }
+                        break;
+                    }
+                    }
+                }
+                else if (selectedTab == 1)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.98f, 1.0f, 1.0f));
+                    float titleWidth2 = ImGui::CalcTextSize("SpaghettiKart").x;
+                    ImGui::SetCursorPosX((contentWidth - titleWidth2) * 0.5f);
+                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 15.0f);
+                    ImGui::Text("SpaghettiKart");
+                    ImGui::PopStyleColor();
+                    ImGui::Spacing();
+                    ImGui::Spacing();
+
+                    ImGui::TextWrapped("A PC port of Mario Kart 64 by HarbourMasters.");
+                    ImGui::Spacing();
+                    ImGui::Spacing();
+
+                    ImGui::TextWrapped("UWP / Xbox port powered by DirectX 11, SDL2, and ImGui.");
+                    ImGui::Spacing();
+                    ImGui::Spacing();
+
+                    ImGui::TextWrapped("Original project: https://github.com/HarbourMasters/SpaghettiKart");
+                    ImGui::Spacing();
+                    ImGui::Spacing();
+
+                    ImGui::TextWrapped("A legally obtained copy of Mario Kart 64 (US) is required.");
+                }
+
+                previousState = currentState;
+                ImGui::EndChild();
+                ImGui::End();
+            }
+
+            ImGui::PopStyleVar(1);
+            ImGui::Render();
+
+            const float clear_color_with_alpha[4] = { clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w };
+            dx11glue::g_pd3dDeviceContext->OMSetRenderTargets(1, &dx11glue::g_mainRenderTargetView, nullptr);
+            dx11glue::g_pd3dDeviceContext->ClearRenderTargetView(dx11glue::g_mainRenderTargetView, clear_color_with_alpha);
+            ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+
+            dx11glue::g_pSwapChain->Present(1, 0);
+            uwp_ProcessEvents();
+        }
+
+        if (extractionThreadStarted && extractionThread.joinable()) {
+            extractionThread.join();
+        }
+
+        ImGui_ImplDX11_Shutdown();
+        ImGui_ImplSDL2_Shutdown();
+        ImGui::DestroyContext();
+
+        dx11glue::CleanupDeviceD3D();
+        SDL_DestroyWindow(window);
+        SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
+
+        return shouldContinue;
+    }
+} // namespace bootmenu

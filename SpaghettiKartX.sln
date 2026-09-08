@@ -1,0 +1,26 @@
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.37614.0 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SpaghettiKartX", "SpaghettiKartX.vcxproj", "{4D53D6D1-E1E7-4824-BFFB-C0B114BCD549}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{4D53D6D1-E1E7-4824-BFFB-C0B114BCD549}.Debug|x64.ActiveCfg = Debug|x64
+		{4D53D6D1-E1E7-4824-BFFB-C0B114BCD549}.Debug|x64.Build.0 = Debug|x64
+		{4D53D6D1-E1E7-4824-BFFB-C0B114BCD549}.Debug|x64.Deploy.0 = Debug|x64
+		{4D53D6D1-E1E7-4824-BFFB-C0B114BCD549}.Release|x64.ActiveCfg = Release|x64
+		{4D53D6D1-E1E7-4824-BFFB-C0B114BCD549}.Release|x64.Build.0 = Release|x64
+		{4D53D6D1-E1E7-4824-BFFB-C0B114BCD549}.Release|x64.Deploy.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {55D9CE95-F3BE-4E1E-B675-DA6206D4316C}
+	EndGlobalSection
+EndGlobal

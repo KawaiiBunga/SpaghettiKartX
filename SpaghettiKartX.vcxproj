@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{4D53D6D1-E1E7-4824-BFFB-C0B114BCD549}</ProjectGuid>
+    <Keyword>DirectXApp</Keyword>
+    <RootNamespace>uwp</RootNamespace>
+    <DefaultLanguage>en-US</DefaultLanguage>
+    <MinimumVisualStudioVersion>14.0</MinimumVisualStudioVersion>
+    <AppContainerApplication>true</AppContainerApplication>
+    <ApplicationType>Windows Store</ApplicationType>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformMinVersion>10.0.19041.0</WindowsTargetPlatformMinVersion>
+    <ApplicationTypeRevision>10.0</ApplicationTypeRevision>
+    <AppxPackageSigningEnabled>True</AppxPackageSigningEnabled>
+    <ResolveNuGetPackages>false</ResolveNuGetPackages>
+    <PackageCertificateKeyFile>SpaghettiKartX_TemporaryKey.pfx</PackageCertificateKeyFile>
+    <PackageCertificatePassword>SpaghettiKartX</PackageCertificatePassword>
+    <ProjectName>SpaghettiKartX</ProjectName>
+    <SKSourceDir>$(ProjectDir)_ref\SpaghettiKart-src\</SKSourceDir>
+    <SKBuildDir>$(ProjectDir)_ref\SpaghettiKart-src\build-win32\</SKBuildDir>
+    <SKReleaseDir>$(SKBuildDir)Release\</SKReleaseDir>
+    <UwpDepDir>$(ProjectDir)_ref\uwp-dep\x64\</UwpDepDir>
+    <ImGuiDir>$(SKBuildDir)_deps\imgui-src\</ImGuiDir>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Link>
+      <AdditionalDependencies>
+        $(SKReleaseDir)Spaghettify.lib;
+        $(UwpDepDir)lib\libuwp.lib;
+        $(UwpDepDir)lib\SDL2.lib;
+        WindowsApp.lib;
+        OneCore.lib;
+        d3d11.lib;
+        d3d12.lib;
+        dxgi.lib;
+        %(AdditionalDependencies)
+      </AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(UwpDepDir)lib;$(VCInstallDir)\lib\store\amd64;$(VCInstallDir)\lib\amd64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <DelayLoadDLLs>Spaghettify.dll</DelayLoadDLLs>
+      <GenerateWindowsMetadata>false</GenerateWindowsMetadata>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(UwpDepDir)include;$(UwpDepDir)include\SDL2;$(ImGuiDir);$(ImGuiDir)backends;$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>NDEBUG;WIN32;_WINDOWS;_UWP;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <CompileAsWinRT>false</CompileAsWinRT>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Link>
+      <AdditionalDependencies>
+        $(SKReleaseDir)Spaghettify.lib;
+        $(UwpDepDir)lib\libuwp.lib;
+        $(UwpDepDir)lib\SDL2.lib;
+        WindowsApp.lib;
+        OneCore.lib;
+        d3d11.lib;
+        d3d12.lib;
+        dxgi.lib;
+        %(AdditionalDependencies)
+      </AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(UwpDepDir)lib;$(VCInstallDir)\lib\store\amd64;$(VCInstallDir)\lib\amd64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <DelayLoadDLLs>Spaghettify.dll</DelayLoadDLLs>
+      <GenerateWindowsMetadata>false</GenerateWindowsMetadata>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(UwpDepDir)include;$(UwpDepDir)include\SDL2;$(ImGuiDir);$(ImGuiDir)backends;$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_DEBUG;WIN32;_WINDOWS;_UWP;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <CompileAsWinRT>false</CompileAsWinRT>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <Image Include="Assets\LockScreenLogo.scale-200.png" />
+    <Image Include="Assets\Square150x150Logo.scale-200.png" />
+    <Image Include="Assets\Square44x44Logo.scale-200.png" />
+    <Image Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" />
+    <Image Include="Assets\StoreLogo.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <AppxManifest Include="Package.appxmanifest">
+      <SubType>Designer</SubType>
+    </AppxManifest>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="dx11glue.cpp" />
+    <ClCompile Include="bootmenu.cpp" />
+    <ClCompile Include="$(ImGuiDir)imgui.cpp" />
+    <ClCompile Include="$(ImGuiDir)imgui_draw.cpp" />
+    <ClCompile Include="$(ImGuiDir)imgui_tables.cpp" />
+    <ClCompile Include="$(ImGuiDir)imgui_widgets.cpp" />
+    <ClCompile Include="$(ImGuiDir)backends\imgui_impl_sdl2.cpp" />
+    <ClCompile Include="$(ImGuiDir)backends\imgui_impl_dx11.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="dx11glue.h" />
+    <ClInclude Include="bootmenu.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="SpaghettiKartX_TemporaryKey.pfx" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Engine DLL -->
+    <Content Include="$(SKReleaseDir)Spaghettify.dll">
+      <Link>Spaghettify.dll</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <!-- Game Archives -->
+    <Content Include="$(SKReleaseDir)spaghetti.o2r">
+      <Link>spaghetti.o2r</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <!-- UWP Runtime Shim DLLs from uwp-dep -->
+    <Content Include="$(UwpDepDir)bin\dxil.dll">
+      <Link>dxil.dll</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <Content Include="$(UwpDepDir)bin\glfw3.dll">
+      <Link>glfw3.dll</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <Content Include="$(UwpDepDir)bin\libgallium_wgl.dll">
+      <Link>libgallium_wgl.dll</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <Content Include="$(UwpDepDir)bin\libuwp.dll">
+      <Link>libuwp.dll</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <Content Include="$(UwpDepDir)bin\opengl32.dll">
+      <Link>opengl32.dll</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <Content Include="$(UwpDepDir)bin\SDL2.dll">
+      <Link>SDL2.dll</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <Content Include="$(UwpDepDir)bin\z-1.dll">
+      <Link>z-1.dll</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <Content Include="C:\Program Files (x86)\Windows Kits\10\Redist\D3D\x64\d3dcompiler_47.dll">
+      <Link>d3dcompiler_47.dll</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <Content Include="C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\dbghelp.dll">
+      <Link>dbghelp.dll</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <!-- Extractor Assets for On-Console Asset Extraction -->
+    <Content Include="$(SKSourceDir)config.yml">
+      <Link>config.yml</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <Content Include="$(SKSourceDir)include\defines.h">
+      <Link>include\defines.h</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <Content Include="$(SKSourceDir)meta\mods.toml">
+      <Link>meta\mods.toml</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+    <Content Include="$(SKSourceDir)yamls\**\*.*">
+      <Link>yamls\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <DeploymentContent>true</DeploymentContent>
+    </Content>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

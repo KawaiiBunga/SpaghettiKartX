@@ -1,0 +1,78 @@
+﻿# Visual Studio & Windows Development
+.vs/
+*.user
+*.userosscache
+*.suo
+*.userprefs
+*.sln.docstates
+*.tlog
+*.idb
+*.pdb
+*.ilk
+*.aps
+*.opendb
+
+# Build Outputs & Intermediate Files
+x64/
+x86/
+ARM/
+ARM64/
+Debug/
+Release/
+bin/
+obj/
+Generated Files/
+SpaghettiKartX/Debug/
+SpaghettiKartX/Release/
+SpaghettiKartX/x64/
+
+# UWP / AppX / MSIX Packaging Artifacts
+AppPackages/
+BundleArtifacts/
+PackagePackages/
+_Packaging.targets
+*.appx
+*.msix
+*.appxbundle
+*.msixbundle
+*.appxsym
+*.msixsym
+*.appxrecipe
+
+# Submodule Build Directories & Dependencies
+_ref/**/build/
+_ref/**/build-*/
+_ref/**/out/
+_ref/**/vcpkg_installed/
+_ref/**/CMakeSettings.json
+_ref/**/*.o2r
+
+# Game ROMs & Extracted Copyrighted Assets (NEVER commit ROMs)
+*.z64
+*.n64
+*.v64
+*.rom
+mk64.o2r
+
+# Logs, Dumps, and Temporary Test Artifacts
+*.log
+*.dmp
+*.mdmp
+*.zip
+cookies*.txt
+dump*/
+temp*/
+
+# OS-Specific
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# Porting Reference Repositories
+_ref/2s2h/
+_ref/2ship2harkinian-uwp/
+_ref/soh/
+_ref/soh-xbox-uwp-ref/
+_ref/SpaghettiKart-main/
+_ref/starship/

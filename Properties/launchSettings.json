@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "SpaghettiKartX": {
+      "commandName": "MsixPackage",
+      "remoteDebugEnabled": true,
+      "remoteDebugMachine": "192.168.1.224",
+      "authenticationMode": "Universal"
+    }
+  }
+}

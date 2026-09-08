@@ -1,0 +1,505 @@
+diff --git a/cmake/dependencies/common.cmake b/cmake/dependencies/common.cmake
+index 8f5813ac..bf489191 100644
+--- a/cmake/dependencies/common.cmake
++++ b/cmake/dependencies/common.cmake
+@@ -3,7 +3,8 @@ include(FetchContent)
+ find_package(OpenGL QUIET)
+ 
+ #=================== ImGui ===================
+-set(imgui_fixes_and_config_patch_file ${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies/patches/imgui-fixes-and-config.patch)
++#set(imgui_fixes_and_config_patch_file ${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies/patches/imgui-fixes-and-config.patch)
++set(imgui_fixes_and_config_patch_file ${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies/patches/imgui-patch-uwp.patch)
+ set(imgui_apply_patch_command ${CMAKE_COMMAND} -Dpatch_file=${imgui_fixes_and_config_patch_file} -Dwith_reset=TRUE -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies/git-patch.cmake)
+ 
+ FetchContent_Declare(
+@@ -110,4 +111,4 @@ FetchContent_Declare(
+     GIT_REPOSITORY https://github.com/KiritoDv/prism-processor.git
+     GIT_TAG bbcbc7e3f890a5806b579361e7aa0336acd547e7
+ )
+-FetchContent_MakeAvailable(prism)
+\ No newline at end of file
++FetchContent_MakeAvailable(prism)
+diff --git a/cmake/dependencies/patches/imgui-patch-uwp.patch b/cmake/dependencies/patches/imgui-patch-uwp.patch
+new file mode 100644
+index 00000000..c2cd2a1a
+--- /dev/null
++++ b/cmake/dependencies/patches/imgui-patch-uwp.patch
+@@ -0,0 +1,87 @@
++ backends/imgui_impl_sdl2.cpp  |  3 ---
++ backends/imgui_impl_win32.cpp | 10 ++++++++++
++ imconfig.h                    |  5 ++++-
++ imgui.cpp                     |  3 ++-
++ 4 files changed, 16 insertions(+), 5 deletions(-)
++
++diff --git a/backends/imgui_impl_sdl2.cpp b/backends/imgui_impl_sdl2.cpp
++index 23f12796..a7fef045 100644
++--- a/backends/imgui_impl_sdl2.cpp
+++++ b/backends/imgui_impl_sdl2.cpp
++@@ -816,9 +816,6 @@ static void ImGui_ImplSDL2_UpdateGamepads()
++         bd->WantUpdateGamepadsList = false;
++     }
++ 
++-    // FIXME: Technically feeding gamepad shouldn't depend on this now that they are regular inputs.
++-    if ((io.ConfigFlags & ImGuiConfigFlags_NavEnableGamepad) == 0)
++-        return;
++     io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
++     if (bd->Gamepads.Size == 0)
++         return;
++diff --git a/backends/imgui_impl_win32.cpp b/backends/imgui_impl_win32.cpp
++index 5ef09bd4..83eb75f2 100644
++--- a/backends/imgui_impl_win32.cpp
+++++ b/backends/imgui_impl_win32.cpp
++@@ -90,6 +90,10 @@
++ #include <tchar.h>
++ #include <dwmapi.h>
++ 
+++#ifdef _UWP
+++extern "C" __declspec(dllimport) void uwp_GetScreenSize(int* x, int* y);
+++#endif
+++
++ // Using XInput for gamepad (will load DLL dynamically)
++ #ifndef IMGUI_IMPL_WIN32_DISABLE_GAMEPAD
++ #include <xinput.h>
++@@ -483,11 +487,17 @@ void    ImGui_ImplWin32_NewFrame()
++     ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
++ 
++     // Setup display size (every frame to accommodate for window resizing)
+++#ifndef _UWP
++     RECT rect = { 0, 0, 0, 0 };
++     ::GetClientRect(bd->hWnd, &rect);
++     io.DisplaySize = ImVec2((float)(rect.right - rect.left), (float)(rect.bottom - rect.top));
++     if (bd->WantUpdateMonitors)
++         ImGui_ImplWin32_UpdateMonitors();
+++#else
+++    int x, y;
+++    uwp_GetScreenSize(&x, &y);
+++    io.DisplaySize = ImVec2((float) x, (float) y);
+++#endif
++ 
++     // Setup time step
++     INT64 current_time = 0;
++diff --git a/imconfig.h b/imconfig.h
++index 8f8bc3b9..cc578e3f 100644
++--- a/imconfig.h
+++++ b/imconfig.h
++@@ -111,7 +111,7 @@
++         operator MyVec4() const { return MyVec4(x,y,z,w); }
++ */
++ //---- ...Or use Dear ImGui's own very basic math operators.
++-//#define IMGUI_DEFINE_MATH_OPERATORS
+++#define IMGUI_DEFINE_MATH_OPERATORS
++ 
++ //---- Use 32-bit vertex indices (default is 16-bit) is one way to allow large meshes with more than 64K vertices.
++ // Your renderer backend will need to support it (most example renderer backends support both 16/32-bit indices).
++@@ -140,3 +140,6 @@ namespace ImGui
++     void MyFunction(const char* name, MyMatrix44* mtx);
++ }
++ */
+++
+++// handle https://github.com/ocornut/imgui/issues/1641 the old way
+++#define ImTextureID void*
++diff --git a/imgui.cpp b/imgui.cpp
++index c7b84cc6..b30bc7a7 100644
++--- a/imgui.cpp
+++++ b/imgui.cpp
++@@ -11088,7 +11088,8 @@ static void ImGui::ErrorCheckNewFrameSanityChecks()
++             IM_ASSERT(g.PlatformIO.Platform_SetWindowPos  != NULL && "Platform init didn't install handlers?");
++             IM_ASSERT(g.PlatformIO.Platform_GetWindowSize != NULL && "Platform init didn't install handlers?");
++             IM_ASSERT(g.PlatformIO.Platform_SetWindowSize != NULL && "Platform init didn't install handlers?");
++-            IM_ASSERT(g.PlatformIO.Monitors.Size > 0 && "Platform init didn't setup Monitors list?");
+++	    // [UWP] Monitor state reworked
+++            //IM_ASSERT(g.PlatformIO.Monitors.Size > 0 && "Platform init didn't setup Monitors list?");
++             IM_ASSERT((g.Viewports[0]->PlatformUserData != NULL || g.Viewports[0]->PlatformHandle != NULL) && "Platform init didn't setup main viewport.");
++             if (g.IO.ConfigDockingTransparentPayload && (g.IO.ConfigFlags & ImGuiConfigFlags_DockingEnable))
++                 IM_ASSERT(g.PlatformIO.Platform_SetWindowAlpha != NULL && "Platform_SetWindowAlpha handler is required to use io.ConfigDockingTransparent!");
+diff --git a/cmake/dependencies/windows.cmake b/cmake/dependencies/windows.cmake
+index 6b3b7b23..289817e7 100644
+--- a/cmake/dependencies/windows.cmake
++++ b/cmake/dependencies/windows.cmake
+@@ -5,8 +5,8 @@ target_sources(ImGui
+ 	${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
+ )
+ 
+-find_package(SDL2 CONFIG REQUIRED)
+-target_link_libraries(ImGui PUBLIC SDL2::SDL2 SDL2::SDL2main)
++#find_package(SDL2 CONFIG REQUIRED)
++target_link_libraries(ImGui PUBLIC SDL2)
+ 
+ find_package(GLEW REQUIRED)
+ target_link_libraries(ImGui PUBLIC opengl32 GLEW::GLEW)
+diff --git a/include/ship/Context.h b/include/ship/Context.h
+index 7c9ef458..f317c202 100644
+--- a/include/ship/Context.h
++++ b/include/ship/Context.h
+@@ -42,6 +42,8 @@ class Context {
+     static std::string GetAppDirectoryPath(std::string appName = "");
+     static std::string GetPathRelativeToAppDirectory(const std::string path, std::string appName = "");
+     static std::string GetPathRelativeToAppBundle(const std::string path);
++    static std::string GetPathRelativeToAuxiliary(const std::string path);
++
+     static std::string LocateFileAcrossAppDirs(const std::string path, std::string appName = "");
+ 
+     Context(std::string name, std::string shortName, std::string configFilePath);
+diff --git a/src/fast/Fast3dWindow.cpp b/src/fast/Fast3dWindow.cpp
+index 9943170d..d9b716fe 100644
+--- a/src/fast/Fast3dWindow.cpp
++++ b/src/fast/Fast3dWindow.cpp
+@@ -15,6 +15,11 @@
+ 
+ #include <fstream>
+ 
++#ifdef _UWP
++extern "C" __declspec(dllimport) float uwp_GetCachedRefreshRate();
++extern "C" __declspec(dllimport) void  uwp_GetScreenSize(int* x, int* y);
++#endif
++
+ namespace Fast {
+ 
+ extern void GfxSetInstance(std::shared_ptr<Interpreter> gfx);
+@@ -79,6 +84,7 @@ void Fast3dWindow::Init() {
+     posX = Ship::Context::GetInstance()->GetConfig()->GetInt("Window.PositionX", 100);
+     posY = Ship::Context::GetInstance()->GetConfig()->GetInt("Window.PositionY", 100);
+ 
++#ifndef _UWP
+     if (isFullscreen) {
+         width = Ship::Context::GetInstance()->GetConfig()->GetInt("Window.Fullscreen.Width", gameMode ? 1280 : 1920);
+         height = Ship::Context::GetInstance()->GetConfig()->GetInt("Window.Fullscreen.Height", gameMode ? 800 : 1080);
+@@ -90,6 +96,14 @@ void Fast3dWindow::Init() {
+         Ship::Context::GetInstance()->GetConfig()->GetInt("Shortcuts.Fullscreen", Ship::KbScancode::LUS_KB_F11));
+     Ship::Context::GetInstance()->GetWindow()->SetMouseCaptureScancode(
+         Ship::Context::GetInstance()->GetConfig()->GetInt("Shortcuts.MouseCapture", Ship::KbScancode::LUS_KB_F2));
++#else
++    int x, y;
++    uwp_GetScreenSize(&x, &y);
++    width = Ship::Context::GetInstance()->GetConfig()->GetInt("Window.Width", x);
++    height = Ship::Context::GetInstance()->GetConfig()->GetInt("Window.Height", y);
++#endif
++
++    SetForceCursorVisibility(Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger("gForceCursorVisibility", 0) != 0);
+ 
+     InitWindowManager();
+     mInterpreter->Init(mWindowManagerApi, mRenderingApi, Ship::Context::GetInstance()->GetName().c_str(), isFullscreen,
+@@ -280,9 +294,13 @@ bool Fast3dWindow::IsMouseCaptured() {
+ }
+ 
+ uint32_t Fast3dWindow::GetCurrentRefreshRate() {
++#ifndef _UWP
+     uint32_t refreshRate;
+     mWindowManagerApi->GetActiveWindowRefreshRate(&refreshRate);
+     return refreshRate;
++#else
++    return std::min<uint32_t>(std::ceil(uwp_GetCachedRefreshRate()), 60);
++#endif
+ }
+ 
+ bool Fast3dWindow::SupportsWindowedFullscreen() {
+diff --git a/src/fast/backends/gfx_dxgi.cpp b/src/fast/backends/gfx_dxgi.cpp
+index ac45102b..3205b915 100644
+--- a/src/fast/backends/gfx_dxgi.cpp
++++ b/src/fast/backends/gfx_dxgi.cpp
+@@ -52,6 +52,14 @@
+ #endif
+ using QWORD = uint64_t; // For NEXTRAWINPUTBLOCK
+ 
++#ifdef _UWP
++extern "C" __declspec(dllimport) float uwp_GetCachedRefreshRate();
++extern "C" __declspec(dllimport) void* uwp_GetWindowReference();
++extern "C" __declspec(dllimport) void uwp_ProcessEvents();
++#endif
++
++using namespace Microsoft::WRL; // For ComPtr
++
+ namespace Fast {
+ 
+ void GfxWindowBackendDXGI::LoadDxgi() {
+@@ -241,6 +249,7 @@ static double HzToPeriod(double Frequency) {
+ }
+ 
+ static void GetMonitorHzPeriod(HMONITOR hMonitor, double& Frequency, double& Period) {
++#ifndef _UWP
+     DEVMODE dm = {};
+     dm.dmSize = sizeof(DEVMODE);
+     if (hMonitor != NULL) {
+@@ -254,9 +263,14 @@ static void GetMonitorHzPeriod(HMONITOR hMonitor, double& Frequency, double& Per
+             }
+         }
+     }
++#else
++    Frequency = uwp_GetCachedRefreshRate();
++    Period = HzToPeriod(Frequency);
++#endif
+ }
+ 
+ static void GetMonitorHzPeriod(std::tuple<HMONITOR, RECT, BOOL> Monitor, double& Frequency, double& Period) {
++#ifndef _UWP
+     HMONITOR hMonitor = get<0>(Monitor);
+     DEVMODE dm = {};
+     dm.dmSize = sizeof(DEVMODE);
+@@ -271,6 +285,10 @@ static void GetMonitorHzPeriod(std::tuple<HMONITOR, RECT, BOOL> Monitor, double&
+             }
+         }
+     }
++#else
++    Frequency = uwp_GetCachedRefreshRate();
++    Period = HzToPeriod(Frequency);
++#endif
+ }
+ 
+ void GfxWindowBackendDXGI::Close() {
+@@ -298,6 +316,7 @@ void GfxWindowBackendDXGI::UpdateMousePrevPos() {
+ }
+ 
+ void GfxWindowBackendDXGI::HandleRawInputBuffered() {
++#ifndef _UWP
+     static UINT offset = -1;
+     if (offset == -1) {
+         offset = sizeof(RAWINPUTHEADER);
+@@ -346,6 +365,7 @@ void GfxWindowBackendDXGI::HandleRawInputBuffered() {
+             }
+         }
+     }
++#endif
+ }
+ 
+ static LRESULT CALLBACK gfx_dxgi_wnd_proc(HWND h_wnd, UINT message, WPARAM w_param, LPARAM l_param) {
+@@ -447,6 +467,7 @@ static LRESULT CALLBACK gfx_dxgi_wnd_proc(HWND h_wnd, UINT message, WPARAM w_par
+         case WM_MOUSEWHEEL:
+             self->mMouseWheel[1] = GET_WHEEL_DELTA_WPARAM(w_param) / WHEEL_DELTA;
+             break;
++#ifndef _UWP
+         case WM_INPUT: {
+             // At this point the top most message should already be off the queue.
+             // So we don't need to get it all, if mouse isn't captured.
+@@ -464,6 +485,7 @@ static LRESULT CALLBACK gfx_dxgi_wnd_proc(HWND h_wnd, UINT message, WPARAM w_par
+             self->HandleRawInputBuffered();
+             break;
+         }
++#endif
+         case WM_MOUSEMOVE:
+             if (!self->mIsMouseHovered) {
+                 self->mIsMouseHovered = true;
+@@ -577,8 +599,12 @@ void GfxWindowBackendDXGI::Init(const char* game_name, const char* gfx_api_name,
+         posY = 100;
+     }
+ 
++#ifndef _UWP
+     h_wnd = CreateWindowW(WINCLASS_NAME, w_title, WS_OVERLAPPEDWINDOW, posX + wr.left, posY + wr.top, current_width,
+                           current_height, nullptr, nullptr, nullptr, this);
++#else
++    h_wnd = static_cast<HWND>(uwp_GetWindowReference());
++#endif
+ 
+     LoadDxgi();
+ 
+@@ -872,6 +898,10 @@ void GfxWindowBackendDXGI::SwapBuffersBegin() {
+     // interval the user wants instead (V-Sync toggle).
+     mVsyncEnabled = Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(CVAR_VSYNC_ENABLED, 1) ? 1 : 0;
+ 
++#ifdef _UWP
++    uwp_ProcessEvents(); // Needed to get any output for uwp apps
++#endif
++
+     LARGE_INTEGER t;
+     QueryPerformanceCounter(&t);
+     int64_t next = qpc_to_100ns(mPreviousPresentTime.QuadPart) +
+@@ -1021,7 +1051,11 @@ void GfxWindowBackendDXGI::CreateSwapChain(IUnknown* mDevice, std::function<void
+     swap_chain_desc.Height = 0;
+     swap_chain_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+     swap_chain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
++#ifndef _UWP
+     swap_chain_desc.Scaling = win8 ? DXGI_SCALING_NONE : DXGI_SCALING_STRETCH;
++#else
++    swap_chain_desc.Scaling = DXGI_SCALING_STRETCH;
++#endif
+     swap_chain_desc.SwapEffect =
+         mDXGI11_4 ? DXGI_SWAP_EFFECT_FLIP_DISCARD : // Introduced in DXGI 1.4 and Windows 10
+             DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL; // Apparently flip sequential was also backported to Win 7 Platform Update
+@@ -1031,7 +1065,12 @@ void GfxWindowBackendDXGI::CreateSwapChain(IUnknown* mDevice, std::function<void
+     }
+     swap_chain_desc.SampleDesc.Count = 1;
+ 
++#ifndef _UWP
+     ThrowIfFailed(mFactory->CreateSwapChainForHwnd(mDevice, h_wnd, &swap_chain_desc, nullptr, nullptr, &swap_chain));
++#else
++    ThrowIfFailed(mFactory->CreateSwapChainForCoreWindow(mDevice, static_cast<IUnknown*>(uwp_GetWindowReference()),
++                                                             &swap_chain_desc, nullptr, &swap_chain));
++#endif
+     ThrowIfFailed(mFactory->MakeWindowAssociation(h_wnd, DXGI_MWA_NO_ALT_ENTER));
+ 
+     ApplyMaxFrameLatency(true);
+@@ -1056,7 +1095,16 @@ IDXGISwapChain1* GfxWindowBackendDXGI::GetSwapChain() {
+ 
+ const char* GfxWindowBackendDXGI::GetKeyName(int scancode) {
+     static char text[64];
++#ifndef _UWP
+     GetKeyNameTextA(scancode << 16, text, 64);
++#else
++    wchar_t wtext[64];
++    if (GetKeyNameTextW(scancode << 16, wtext, 64) > 0) {
++        WideCharToMultiByte(CP_UTF8, 0, wtext, -1, text, sizeof(text), NULL, NULL);
++    } else {
++        text[0] = '\0'; // fallback if the call fails
++    }
++#endif
+     return text;
+ }
+ 
+diff --git a/src/fast/backends/gfx_sdl2.cpp b/src/fast/backends/gfx_sdl2.cpp
+index eb5df8b2..b75989bd 100644
+--- a/src/fast/backends/gfx_sdl2.cpp
++++ b/src/fast/backends/gfx_sdl2.cpp
+@@ -44,6 +44,10 @@
+ LONG_PTR SDL_WndProc;
+ #endif
+ 
++#ifdef _UWP
++extern "C" __declspec(dllimport) float uwp_GetCachedRefreshRate();
++#endif
++
+ namespace Fast {
+ const SDL_Scancode lus_to_sdl_table[] = {
+     SDL_SCANCODE_UNKNOWN,
+@@ -692,7 +696,14 @@ void GfxWindowBackendSDL2::SwapBuffersBegin() {
+         SDL_RenderSetVSync(mRenderer, mVsyncEnabled ? 1 : 0);
+     }
+ 
+-    SyncFramerateWithTime();
++    // DLW: No need to sync on timer if target matches host refresh
++    // -> Might be UWP specific since vsync is forced on inside mesa driver
++    // -> Have noticed imgui framerate glitches out when skipping sync but also gets rid of microstutters
++    if (abs(mTargetFps - uwp_GetCachedRefreshRate()) >= 1) {
++        SyncFramerateWithTime();
++    } else {
++        previous_time = qpc_to_100ns(SDL_GetPerformanceCounter());
++    }
+     SDL_GL_SwapWindow(mWnd);
+ }
+ 
+diff --git a/src/ship/Context.cpp b/src/ship/Context.cpp
+index f3db0445..5c45d739 100644
+--- a/src/ship/Context.cpp
++++ b/src/ship/Context.cpp
+@@ -1,6 +1,7 @@
+ #include "ship/Context.h"
+ #include "ship/controller/controldevice/controller/mapping/keyboard/KeyboardScancodes.h"
+ #include <iostream>
++#include <filesystem>
+ #include <spdlog/async.h>
+ #include <spdlog/sinks/rotating_file_sink.h>
+ #include <spdlog/sinks/stdout_color_sinks.h>
+@@ -24,6 +25,16 @@
+ #include <pwd.h>
+ #endif
+ 
++#ifdef _UWP
++#include <Windows.h>
++#include <map>
++#include <string>
++#include <winrt/Windows.Storage.h>
++#include <winrt/Windows.Foundation.h>
++#include <winrt/Windows.Foundation.Collections.h>
++#include <winrt/base.h>
++#endif
++
+ namespace Ship {
+ std::weak_ptr<Context> Context::mContext;
+ 
+@@ -142,7 +153,9 @@ bool Context::InitLogging() {
+         sinks.push_back(systemConsoleSink);
+ #endif
+ 
++        // UWP TODO: Issue with folder creation in local state, would be nice to get outside app folder for logs
+         auto logPath = GetPathRelativeToAppDirectory(("logs/" + GetName() + ".log"));
++
+         auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(logPath, 1024 * 1024 * 10, 10);
+         sinks.push_back(fileSink);
+ #ifdef _DEBUG
+@@ -201,7 +214,11 @@ bool Context::InitResourceManager(const std::vector<std::string>& archivePaths,
+     }
+ 
+     mMainPath = GetConfig()->GetString("Game.Main Archive", GetAppDirectoryPath());
++#ifndef _UWP
+     mPatchesPath = GetConfig()->GetString("Game.Patches Archive", GetAppDirectoryPath() + "/mods");
++#else
++    mPatchesPath = GetConfig()->GetString("Game.Patches Archive", GetPathRelativeToAuxiliary("/mods"));
++#endif
+     if (archivePaths.empty()) {
+         std::vector<std::string> paths = std::vector<std::string>();
+         paths.push_back(mMainPath);
+@@ -504,6 +521,50 @@ std::string Context::GetPathRelativeToAppDirectory(const std::string path, std::
+     return GetAppDirectoryPath(appName) + "/" + path;
+ }
+ 
++std::string Context::GetPathRelativeToAuxiliary(const std::string path) {
++#ifdef _UWP
++    static std::map<std::string, bool> driveAccessCache;
++    auto CheckDriveAccess = [&](const std::string& driveName) -> bool {
++        auto it = driveAccessCache.find(driveName);
++        if (it != driveAccessCache.end()) {
++            return it->second;
++        }
++        bool accessible = false;
++        try {
++            std::wstring drivePath = std::wstring(driveName.begin(), driveName.end()) + L"\\*.*";
++            WIN32_FIND_DATA findData;
++            HANDLE searchHandle = FindFirstFileExFromAppW(
++                drivePath.c_str(),
++                FindExInfoBasic,
++                &findData,
++                FindExSearchNameMatch,
++                nullptr,
++                0
++            );
++            if (searchHandle != INVALID_HANDLE_VALUE && searchHandle != nullptr) {
++                FindClose(searchHandle);
++                accessible = true;
++            }
++        } catch (...) {
++            accessible = false;
++        }
++        driveAccessCache[driveName] = accessible;
++        return accessible;
++    };
++
++    const char* drives[] = { "E:", "D:" };
++    for (const char* drive : drives) {
++        if (CheckDriveAccess(drive)) {
++            return (std::filesystem::path(std::string(drive) + "/2ship/") / path).string();
++        }
++    }
++    // Final fallback to D:/2ship/
++    return std::string("D:/2ship/") + path;
++#else
++    return std::string("E:/2ship/") + path;
++#endif
++}
++
+ std::string Context::LocateFileAcrossAppDirs(const std::string path, std::string appName) {
+     std::string fpath;
+ 
+@@ -517,6 +578,11 @@ std::string Context::LocateFileAcrossAppDirs(const std::string path, std::string
+     if (std::filesystem::exists(fpath)) {
+         return fpath;
+     }
++    // auxiliary
++    fpath = GetPathRelativeToAuxiliary(path);
++    if (std::filesystem::exists(fpath)) {
++        return fpath;
++    }
+     // current dir
+     return "./" + std::string(path);
+ }
+diff --git a/src/ship/config/Config.cpp b/src/ship/config/Config.cpp
+index 654113e2..a9a9fa80 100644
+--- a/src/ship/config/Config.cpp
++++ b/src/ship/config/Config.cpp
+@@ -301,6 +301,9 @@ WindowBackend Config::GetWindowBackend() {
+     SPDLOG_TRACE(
+         "Could not find available WindowBackend matching id from config file ({}). Returning default WindowBackend.",
+         backendId);
++#ifdef _UWP
++    return WindowBackend::FAST3D_SDL_OPENGL;
++#endif
+ #ifdef ENABLE_DX11
+     return WindowBackend::FAST3D_DXGI_DX11;
+ #endif
