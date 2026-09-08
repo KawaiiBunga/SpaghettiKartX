@@ -1,0 +1,275 @@
+#include <libultraship.h>
+#include "Boat.h"
+#include <vector>
+#include "Utils.h"
+#include "port/Game.h"
+
+extern "C" {
+#include "macros.h"
+#include "main.h"
+#include "defines.h"
+#include "code_80005FD0.h"
+#include "racing/actors.h"
+#include "racing/math_util.h"
+#include "sounds.h"
+#include "update_objects.h"
+extern s8 gPlayerCount;
+}
+
+size_t ABoat::_count = 0;
+std::map<uint32_t, std::vector<uint32_t>> ABoat::BoatCounts;
+
+ABoat::ABoat(const SpawnParams& params) : AActor(params) {
+    Name = "Paddle Steam Boat";
+    ResourceName = "mk:paddle_boat";
+    BoundingBoxSize = 2.0f;
+    TrackPathPoint* temp_a2;
+    Index = _count;
+    Speed = params.Speed.value_or(0);
+
+    // Set to the default value
+    std::fill(SmokeParticles, SmokeParticles + 128, NULL_OBJECT_ID);
+
+    ABoat::SpawnMode spawnMode = static_cast<SpawnMode>(params.Type.value_or(SpawnMode::POINT));
+    uint32_t pathIndex = params.PathIndex.value_or(0);
+    uint32_t pathPoint = 0;
+
+    switch(spawnMode) {
+        case SpawnMode::POINT: // Spawn train at a specific path point
+            pathPoint = params.PathPoint.value_or(0);
+            BoatCounts[pathIndex].push_back(pathPoint);
+            break;
+        case SpawnMode::AUTO: // Automatically distribute trains based on a specific path point
+            pathPoint = GetVehiclePathPointDistributed(BoatCounts[pathIndex], gVehiclePathSize);
+            BoatCounts[pathIndex].push_back(pathPoint);
+            break;
+    }
+
+    temp_a2 = &gVehicle2DPathPoint[pathPoint];
+    Position[0] = temp_a2->x;
+    Position[1] = D_80162EB2;
+    Position[2] = temp_a2->z;
+    WaypointIndex = Index * 0xB4;
+    ActorIndex = -1;
+
+    IsActive = 1;
+
+    Velocity[0] = 0.0f;
+    Velocity[1] = 0.0f;
+    Velocity[2] = 0.0f;
+
+    Vec3s paddleWheelBoatRot;
+    if (IsActive == 1) {
+        f32 origXPos = Position[0];
+        f32 origZPos = Position[2];
+        RotY = update_vehicle_following_path(Position, (s16*) &WaypointIndex, Speed);
+        Velocity[0] = Position[0] - origXPos;
+        Velocity[2] = Position[2] - origZPos;
+        vec3s_set(paddleWheelBoatRot, 0, RotY, 0);
+        ActorIndex = add_actor_to_empty_slot(Position, paddleWheelBoatRot, Velocity, ACTOR_PADDLE_BOAT);
+    }
+
+    _count++;
+}
+
+void ABoat::SetSpawnParams(SpawnParams& params) {
+    AActor::SetSpawnParams(params);
+    params.Type = static_cast<uint16_t>(SpawnType);
+    params.Speed = Speed;
+    params.PathIndex = PathIndex;
+    params.PathPoint = PathPoint;
+}
+
+void ABoat::Draw(Camera* camera) {
+}
+
+bool ABoat::IsMod() {
+    return true;
+}
+
+void ABoat::Tick60fps() {
+    TrackPathPoint* waypoint;
+    struct Actor* paddleBoatActor;
+    f32 temp_f26;
+    f32 temp_f28;
+    f32 temp_f30;
+    s16 temp_a1;
+    s32 temp;
+    s16 var_v1;
+    Vec3f sp94;
+    Vec3f sp88;
+    UNUSED s32 pad;
+    Vec3f smokePos;
+    UNUSED s32 pad2;
+    AnotherSmokeTimer += 1;
+    if (IsActive == 1) {
+        temp_f26 = Position[0];
+        temp_f28 = Position[1];
+        temp_f30 = Position[2];
+        update_vehicle_following_path(Position, (s16*) &WaypointIndex, Speed);
+        SomeFlags = set_vehicle_render_distance_flags(Position, BOAT_SMOKE_RENDER_DISTANCE, SomeFlags);
+        if ((((s16) AnotherSmokeTimer % 10) == 0) && (SomeFlags != 0)) {
+            smokePos[0] = (f32) ((f64) Position[0] - 30.0);
+            smokePos[1] = (f32) ((f64) Position[1] + 180.0);
+            smokePos[2] = (f32) ((f64) Position[2] + 45.0);
+            adjust_position_by_angle(smokePos, Position, RotY);
+            // spawn_ferry_smoke(Index, smokePos, 1.1f);
+            AddSmoke(Index, smokePos, 1.1f);
+            smokePos[0] = (f32) ((f64) Position[0] + 30.0);
+            smokePos[1] = (f32) ((f64) Position[1] + 180.0);
+            smokePos[2] = (f32) ((f64) Position[2] + 45.0);
+            adjust_position_by_angle(smokePos, Position, RotY);
+            // spawn_ferry_smoke(Index, smokePos, 1.1f);
+            AddSmoke(Index, smokePos, 1.1f);
+        }
+        if (random_int(100) == 0) {
+            if (random_int(2) == 0) {
+                func_800C98B8(Position, Velocity, SOUND_ARG_LOAD(0x19, 0x01, 0x80, 0x47));
+            } else {
+                func_800C98B8(Position, Velocity, SOUND_ARG_LOAD(0x19, 0x01, 0x80, 0x48));
+            }
+        }
+        sp94[0] = temp_f26;
+        sp94[1] = temp_f28;
+        sp94[2] = temp_f30;
+        waypoint = &gVehicle2DPathPoint[(WaypointIndex + 5) % gVehiclePathSize];
+        sp88[0] = (f32) waypoint->x;
+        sp88[1] = (f32) D_80162EB0;
+        sp88[2] = (f32) waypoint->z;
+        temp_a1 = get_angle_between_path(sp94, sp88);
+        temp = temp_a1 - RotY;
+        var_v1 = temp;
+        if (var_v1 < 0) {
+            var_v1 = -var_v1;
+        }
+        if (var_v1 >= 0x1771) {
+            if (Speed > 0.2) {
+                Speed -= 0.04;
+            }
+            if (var_v1 >= 0x3D) {
+                var_v1 = 0x003C;
+            }
+        } else {
+            if (Speed < 2.0) {
+                Speed += 0.02;
+            }
+            if (var_v1 >= 0x1F) {
+                var_v1 = 0x001E;
+            }
+        }
+        if (temp >= 0x8000) {
+            RotY -= var_v1;
+        } else if (temp > 0) {
+            RotY += var_v1;
+        } else if (temp < -0x7FFF) {
+            RotY += var_v1;
+        } else if (temp < 0) {
+            RotY -= var_v1;
+        }
+        Velocity[0] = Position[0] - temp_f26;
+        Velocity[1] = Position[1] - temp_f28;
+        Velocity[2] = Position[2] - temp_f30;
+        paddleBoatActor = GET_ACTOR(ActorIndex);
+        paddleBoatActor->pos[0] = Position[0];
+        paddleBoatActor->pos[1] = Position[1];
+        paddleBoatActor->pos[2] = Position[2];
+        if (gIsMirrorMode != 0) {
+            paddleBoatActor->rot[1] = -RotY;
+        } else {
+            paddleBoatActor->rot[1] = RotY;
+        }
+        Velocity[0] = Velocity[0];
+        Velocity[1] = Velocity[1];
+        Velocity[2] = Velocity[2];
+    }
+}
+
+void ABoat::VehicleCollision(s32 playerId, Player* player) {
+    f32 x_diff;
+    f32 y_diff;
+    f32 z_diff;
+    f32 playerX;
+    f32 playerZ;
+    f32 playerY;
+
+    if (!((player->effects & 0x01000000)) && (!(player->effects & HIT_BY_ITEM_EFFECT))) {
+        playerX = player->pos[0];
+        playerY = player->pos[1];
+        playerZ = player->pos[2];
+        if (IsActive == 1) {
+            x_diff = playerX - Position[0];
+            y_diff = playerY - Position[1];
+            z_diff = playerZ - Position[2];
+            if ((x_diff > -300.0) && (x_diff < 300.0)) {
+                if ((z_diff > -300.0) && (z_diff < 300.0)) {
+                    if ((is_collide_with_vehicle(Position[0], Position[2], Velocity[0], Velocity[2], 200.0f, 60.0f,
+                                                 playerX, playerZ) == 1) &&
+                        (y_diff < 60.0)) {
+                        player->triggers |= HIT_PADDLE_BOAT_TRIGGER;
+                    }
+                }
+            }
+        }
+    }
+}
+
+s32 ABoat::AddSmoke(size_t ferryIndex, Vec3f pos, f32 velocity) {
+    s32 objectIndex = add_unused_obj_index(SmokeParticles, &NextParticlePtr, gObjectParticle2_SIZE);
+    if (objectIndex != NULL_OBJECT_ID) {
+        init_ferry_smoke(objectIndex, pos, velocity);
+    }
+
+    return objectIndex;
+}
+
+void ABoat::DrawEditorProperties() {
+    ImGui::Text("Spawn Mode");
+    ImGui::SameLine();
+
+    int32_t type = static_cast<int32_t>(SpawnType);
+    const char* items[] = { "POINT", "AUTO" };
+
+    if (ImGui::Combo("##Type", &type, items, IM_ARRAYSIZE(items))) {
+        SpawnType = static_cast<ABoat::SpawnMode>(type);
+    }
+
+    if (SpawnType == ABoat::SpawnMode::POINT) {
+        ImGui::Text("Path Index");
+        ImGui::SameLine();
+
+        int pathIndex = static_cast<int>(PathIndex);
+        if (ImGui::InputInt("##PathIndex", &pathIndex)) {
+            if (pathIndex < 0) pathIndex = 0;
+            PathIndex = static_cast<uint32_t>(pathIndex);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_FA_UNDO "##ResetPathIndex")) {
+            PathIndex = 0;
+        }
+
+        ImGui::Text("Path Point");
+        ImGui::SameLine();
+
+        int pathPoint = static_cast<int>(PathPoint);
+        if (ImGui::InputInt("##PathPoint", &pathPoint)) {
+            if (pathPoint < 0) pathPoint = 0;
+            PathPoint = static_cast<uint32_t>(pathPoint);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_FA_UNDO "##ResetPathPoint")) {
+            PathPoint = 0;
+        }
+    }
+
+    ImGui::Text("Speed");
+    ImGui::SameLine();
+
+    float speed = Speed;
+    if (ImGui::DragFloat("##Speed", &speed, 0.1f)) {
+        Speed = speed;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_FA_UNDO "##ResetSpeed")) {
+        Speed = 0.0f;
+    }
+}

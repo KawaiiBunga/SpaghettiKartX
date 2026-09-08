@@ -1,0 +1,12 @@
+#pragma once
+
+#include <libultraship.h>
+#include <vector>
+#include "objects/Object.h"
+#include "World.h"
+
+
+void RunGarbageCollector();
+void CleanActors();
+void CleanStaticMeshActors();
+void CleanObjects();

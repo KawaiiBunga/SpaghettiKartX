@@ -1,0 +1,591 @@
+name: GenerateBuilds
+
+on:
+  push:
+    branches: ["*"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generate-port-o2r:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+    - name: Install dependencies
+      run: sudo apt-get install gcc g++ git cmake ninja-build lsb-release
+    - name: ccache
+      uses: hendrikmuhs/ccache-action@v1.2.13
+      with:
+        key: ${{ runner.os }}-o2r-ccache-${{ github.ref }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-o2r-ccache-${{ github.ref }}
+          ${{ runner.os }}-o2r-ccache-
+    - name: Cache build folders
+      uses: actions/cache@v4
+      with:
+        key: ${{ runner.os }}-o2r-build-${{ github.ref }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-o2r-build-${{ github.ref }}
+          ${{ runner.os }}-o2r-build-
+        path: |
+          torch/cmake-build-release
+    - name: Generate spaghetti.o2r
+      run: |
+        export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+        make -C torch type=release -j3
+        torch/cmake-build-release/torch pack assets spaghetti.o2r o2r
+    - uses: actions/upload-artifact@v4
+      with:
+        name: spaghetti.o2r
+        path: spaghetti.o2r
+        retention-days: 1
+
+  build-windows:
+    needs: generate-port-o2r
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        config: [Release, Debug]
+        arch: [x64, Win32]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+      - name: Build
+        run: |
+          cmake -S . -B "build/${{ matrix.arch }}" -G "Visual Studio 17 2022" -T v143 -A ${{ matrix.arch }} -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+          cmake --build ./build/${{ matrix.arch }} --config ${{ matrix.config }} --parallel 10
+      - name: Download spaghetti.o2r
+        uses: actions/download-artifact@v4
+        with:
+          name: spaghetti.o2r
+          path: ./build/${{ matrix.arch }}/${{ matrix.config }}
+      - name: Create Package
+        run: |
+          mkdir spaghetti-${{ matrix.config }}
+          mv build/${{ matrix.arch }}/${{ matrix.config }}/Spaghettify.exe spaghetti-${{ matrix.config }}/
+          mv build/${{ matrix.arch }}/${{ matrix.config }}/spaghetti.o2r spaghetti-${{ matrix.config }}/
+          mv config.yml spaghetti-${{ matrix.config }}/
+          mv yamls spaghetti-${{ matrix.config }}/
+          mv meta spaghetti-${{ matrix.config }}/
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/mdqinc/SDL_GameControllerDB/master/gamecontrollerdb.txt" -OutFile "spaghetti-${{ matrix.config }}/gamecontrollerdb.txt"
+      - name: Upload build
+        if: matrix.config == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: spaghetti-windows-${{ matrix.arch }}
+          path: spaghetti-${{ matrix.config }}
+
+  build-macos-arm64:
+    needs: generate-port-o2r
+    runs-on: macOS-latest
+    strategy:
+      matrix:
+        config: [Release, Debug]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+      - name: Install dependencies
+        run: brew install ninja cmake
+      - name: Build
+        run: |
+          cmake -H. -Bbuild-cmake -GNinja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DENABLE_VCPKG=ON
+          cmake --build build-cmake --config ${{ matrix.config }} -j3
+      - name: Download spaghetti.o2r
+        uses: actions/download-artifact@v4
+        with:
+          name: spaghetti.o2r
+          path: ./build-cmake
+      - name: Create Package
+        run: |
+          APP=build-cmake/SpaghettiKart.app
+          # Insert the canonical spaghetti.o2r from the generate-port-o2r job and
+          # the controller database, then re-sign since the bundle contents changed.
+          cp build-cmake/spaghetti.o2r $APP/Contents/Resources/spaghetti.o2r
+          wget -O $APP/Contents/Resources/gamecontrollerdb.txt https://raw.githubusercontent.com/mdqinc/SDL_GameControllerDB/master/gamecontrollerdb.txt
+          codesign --force --deep --sign - --options runtime --entitlements cmake/macos/entitlements.plist $APP
+          mkdir spaghetti-${{ matrix.config }}
+          # Zip with ditto so the executable bit survives artifact upload.
+          ditto -c -k --keepParent $APP spaghetti-${{ matrix.config }}/SpaghettiKart.app.zip
+      - name: Publish packaged artifacts
+        if: matrix.config == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+            name: spaghetti-mac-arm64
+            path: spaghetti-${{ matrix.config }}
+  
+  build-macos-intel:
+    needs: generate-port-o2r
+    runs-on: macos-15-intel
+    strategy:
+      matrix:
+        config: [Release, Debug]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+      - name: Install dependencies
+        run: brew install ninja cmake
+      - name: Build
+        run: |
+          cmake -H. -Bbuild-cmake -GNinja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DENABLE_VCPKG=ON
+          cmake --build build-cmake --config ${{ matrix.config }} -j3
+      - name: Download spaghetti.o2r
+        uses: actions/download-artifact@v4
+        with:
+          name: spaghetti.o2r
+          path: ./build-cmake
+      - name: Create Package
+        run: |
+          APP=build-cmake/SpaghettiKart.app
+          # Insert the canonical spaghetti.o2r from the generate-port-o2r job and
+          # the controller database, then re-sign since the bundle contents changed.
+          cp build-cmake/spaghetti.o2r $APP/Contents/Resources/spaghetti.o2r
+          wget -O $APP/Contents/Resources/gamecontrollerdb.txt https://raw.githubusercontent.com/mdqinc/SDL_GameControllerDB/master/gamecontrollerdb.txt
+          codesign --force --deep --sign - --options runtime --entitlements cmake/macos/entitlements.plist $APP
+          mkdir spaghetti-${{ matrix.config }}
+          # Zip with ditto so the executable bit survives artifact upload.
+          ditto -c -k --keepParent $APP spaghetti-${{ matrix.config }}/SpaghettiKart.app.zip
+      - name: Publish packaged artifacts
+        if: matrix.config == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+            name: spaghetti-mac-intel-x64
+            path: spaghetti-${{ matrix.config }}
+
+  build-linux:
+    needs: generate-port-o2r
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        config: [Release, Debug]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+      - name: Update machine
+        run: sudo apt update
+      - name: Install dependencies
+        run: sudo apt-get install gcc g++ git cmake ninja-build lsb-release libsdl2-dev libsdl2-net-dev libpng-dev libsdl2-net-dev libzip-dev zipcmp zipmerge ziptool nlohmann-json3-dev libtinyxml2-dev libspdlog-dev libboost-dev libopengl-dev libogg-dev libvorbis-dev
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.14
+        with:
+          key: linux-ccache-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            linux-ccache-${{ github.ref }}
+            linux-ccache-
+      - name: Cache build folders
+        uses: actions/cache@v4
+        with:
+          key: linux-build-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            linux-build-${{ github.ref }}
+            linux-build-
+          path: |
+            SDL2-2.30.3
+            tinyxml2-10.0.0
+            libzip-1.10.1
+      - name: Install latest SDL
+        run: |
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+          if [ ! -d "SDL2-2.30.3" ]; then
+            wget https://www.libsdl.org/release/SDL2-2.30.3.tar.gz
+            tar -xzf SDL2-2.30.3.tar.gz
+          fi
+          cd SDL2-2.30.3
+          ./configure --enable-hidapi-libusb
+          make -j 10
+          sudo make install
+          sudo cp -av /usr/local/lib/libSDL* /lib/x86_64-linux-gnu/
+      - name: Install latest tinyxml2
+        run: |
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+          wget https://github.com/leethomason/tinyxml2/archive/refs/tags/10.0.0.tar.gz
+          tar -xzf 10.0.0.tar.gz
+          cd tinyxml2-10.0.0
+          mkdir -p build
+          cd build
+          cmake ..
+          make
+          sudo make install
+      - name: Install libzip without crypto
+        run: |
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+          if [ ! -d "libzip-1.10.1" ]; then
+            wget https://github.com/nih-at/libzip/releases/download/v1.10.1/libzip-1.10.1.tar.gz
+            tar -xzf libzip-1.10.1.tar.gz
+          fi
+          cd libzip-1.10.1
+          mkdir -p build
+          cd build
+          cmake .. -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF -DENABLE_MBEDTLS=OFF -DENABLE_OPENSSL=OFF
+          make
+          sudo make install
+          sudo cp -av /usr/local/lib/libzip* /lib/x86_64-linux-gnu/
+      - name: Download spaghetti.o2r
+        uses: actions/download-artifact@v4
+        with:
+          name: spaghetti.o2r
+          path: ./build-cmake
+      - name: Build
+        run: |
+          cmake -H. -Bbuild-cmake -GNinja -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+          cmake --build build-cmake --config ${{ matrix.config }} -j3
+          (cd build-cmake && cpack -G External)
+          wget -O gamecontrollerdb.txt https://raw.githubusercontent.com/mdqinc/SDL_GameControllerDB/master/gamecontrollerdb.txt
+          mv README.md readme.txt
+          mv build-cmake/*.appimage spaghetti.appimage
+
+  build-linux-old:
+    needs: generate-port-o2r
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        config: [Release, Debug]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+      - name: Update machine
+        run: sudo apt update
+      - name: Install dependencies
+        run: sudo apt-get install gcc g++ git cmake ninja-build lsb-release libsdl2-dev libsdl2-net-dev libpng-dev libsdl2-net-dev libzip-dev zipcmp zipmerge ziptool nlohmann-json3-dev libtinyxml2-dev libspdlog-dev libboost-dev libopengl-dev libogg-dev libvorbis-dev
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.14
+        with:
+          key: linux-old-ccache-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            linux-old-ccache-${{ github.ref }}
+            linux-old-ccache-
+      - name: Cache build folders
+        uses: actions/cache@v4
+        with:
+          key: linux-old-build-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            linux-build-old-${{ github.ref }}
+            linux-build-old-
+          path: |
+            SDL2-2.30.3
+            tinyxml2-10.0.0
+            libzip-1.10.1
+      - name: Install latest SDL
+        run: |
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+          if [ ! -d "SDL2-2.30.3" ]; then
+            wget https://www.libsdl.org/release/SDL2-2.30.3.tar.gz
+            tar -xzf SDL2-2.30.3.tar.gz
+          fi
+          cd SDL2-2.30.3
+          ./configure --enable-hidapi-libusb
+          make -j 10
+          sudo make install
+          sudo cp -av /usr/local/lib/libSDL* /lib/x86_64-linux-gnu/
+      - name: Install latest SDL_net
+        run: |
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+          if [ ! -d "SDL2_net-2.2.0" ]; then
+            wget https://www.libsdl.org/projects/SDL_net/release/SDL2_net-2.2.0.tar.gz
+            tar -xzf SDL2_net-2.2.0.tar.gz
+          fi
+          cd SDL2_net-2.2.0
+          ./configure
+          make -j 10
+          sudo make install
+          sudo cp -av /usr/local/lib/libSDL* /lib/x86_64-linux-gnu/
+      - name: Install latest tinyxml2
+        run: |
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+          wget https://github.com/leethomason/tinyxml2/archive/refs/tags/10.0.0.tar.gz
+          tar -xzf 10.0.0.tar.gz
+          cd tinyxml2-10.0.0
+          mkdir -p build
+          cd build
+          cmake ..
+          make
+          sudo make install
+      - name: Install libzip without crypto
+        run: |
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+          if [ ! -d "libzip-1.10.1" ]; then
+            wget https://github.com/nih-at/libzip/releases/download/v1.10.1/libzip-1.10.1.tar.gz
+            tar -xzf libzip-1.10.1.tar.gz
+          fi
+          cd libzip-1.10.1
+          mkdir -p build
+          cd build
+          cmake .. -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF -DENABLE_MBEDTLS=OFF -DENABLE_OPENSSL=OFF
+          make
+          sudo make install
+          sudo cp -av /usr/local/lib/libzip* /lib/x86_64-linux-gnu/
+      - name: Download spaghetti.o2r
+        uses: actions/download-artifact@v4
+        with:
+          name: spaghetti.o2r
+          path: ./build-cmake
+      - name: Build
+        run: |
+          cmake -H. -Bbuild-cmake -GNinja -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+          cmake --build build-cmake --config ${{ matrix.config }} -j3
+
+  build-linux-docker:
+    needs: generate-port-o2r
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        config: [Release, Debug]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+      - name: Docker caching
+        uses: ScribeMD/docker-cache@0.5.0
+        id: cache
+        continue-on-error: true
+        with:
+          key: sk-docker-cache-${{ hashFiles('Dockerfile') }}
+      - name: Build docker image
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: docker build . -t spaghetti
+      - name: Confiure
+        run: docker run --rm -v ${PWD}:/project spaghetti cmake -H. -Bbuild-cmake -GNinja -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+      - name: Build spaghetti
+        run: docker run --rm -v ${PWD}:/project spaghetti cmake --build build-cmake --config ${{ matrix.config }} -j$(nproc)
+
+  build-linux-release-docker:
+    needs: generate-port-o2r
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        config: [Release]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ hashFiles('script/Dockerfile', 'vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./script/Dockerfile
+          push: false
+          load: true
+          tags: spaghettikart-builder:latest
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      - name: Build project in Docker
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/project" \
+            spaghettikart-builder:latest \
+            bash -c "
+              cmake -B build -G Ninja \
+                -DCMAKE_BUILD_TYPE=${{ matrix.config }} \
+                -DENABLE_VCPKG=ON && \
+              cmake --build build --parallel
+            "
+
+      - name: Fix permissions
+        run: sudo chown -R $(id -u):$(id -g) build
+
+      - name: Download spaghetti.o2r
+        uses: actions/download-artifact@v4
+        with:
+          name: spaghetti.o2r
+          path: ./build
+
+      - name: Generate AppImage
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/project" \
+            spaghettikart-builder:latest \
+            bash -c "
+              cd /project/build && \
+              cpack -G External || true
+            "
+
+      - name: Create Package
+        run: |
+          mkdir -p spaghetti-${{ matrix.config }}
+          wget -O gamecontrollerdb.txt https://raw.githubusercontent.com/mdqinc/SDL_GameControllerDB/master/gamecontrollerdb.txt
+          mv gamecontrollerdb.txt spaghetti-${{ matrix.config }}/
+          cp build/*.appimage spaghetti-${{ matrix.config }}/spaghetti.appimage 2>/dev/null || true
+
+      - name: Publish packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: spaghetti-linux-x64
+          path: spaghetti-${{ matrix.config }}
+
+      # Workaround for cache growing too large
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache || true
+
+  build-linux-x86-docker:
+    needs: generate-port-o2r
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        config: [Release]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+ 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache-x86
+          key: ${{ runner.os }}-buildx-x86-${{ hashFiles('script/Dockerfile.x86', 'vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-x86-
+
+      - name: Build Docker image for x86
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./script/Dockerfile.x86
+          platforms: linux/386
+          push: false
+          load: true
+          tags: spaghettikart-x86:latest
+          cache-from: type=local,src=/tmp/.buildx-cache-x86
+          cache-to: type=local,dest=/tmp/.buildx-cache-x86-new,mode=max
+
+      - name: Build project in Docker (x86)
+        run: |
+          docker run --rm --platform linux/386 \
+            -v "${{ github.workspace }}:/project" \
+            spaghettikart-x86:latest \
+            bash -c "
+              cmake -B build-x86 -G Ninja \
+                -DCMAKE_BUILD_TYPE=${{ matrix.config }} && \
+              cmake --build build-x86 --parallel
+            "
+
+      - name: Fix permissions
+        run: sudo chown -R $(id -u):$(id -g) build-x86
+
+      - name: Download spaghetti.o2r
+        uses: actions/download-artifact@v4
+        with:
+          name: spaghetti.o2r
+          path: ./build-x86
+
+      - name: Generate AppImage
+        run: |
+          docker run --rm --platform linux/386 \
+            -v "${{ github.workspace }}:/project" \
+            spaghettikart-x86:latest \
+            bash -c "
+              cd /project/build-x86 && \
+              cpack -G External
+            "
+
+      - name: Create Package
+        run: |
+          mkdir -p spaghetti-x86-${{ matrix.config }}
+          wget -O gamecontrollerdb.txt https://raw.githubusercontent.com/mdqinc/SDL_GameControllerDB/master/gamecontrollerdb.txt
+          mv gamecontrollerdb.txt spaghetti-x86-${{ matrix.config }}/
+          cp build-x86/*.appimage spaghetti-x86-${{ matrix.config }}/spaghetti.appimage
+
+      - name: Publish packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: spaghetti-linux-x86
+          path: spaghetti-x86-${{ matrix.config }}
+
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache-x86
+          mv /tmp/.buildx-cache-x86-new /tmp/.buildx-cache-x86 || true
+
+  build-switch:
+    needs: generate-port-o2r
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        config: [Release, Debug]
+    container:
+      image: devkitpro/devkita64:20251117
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+      - name: Download spaghetti.o2r
+        uses: actions/download-artifact@v4
+        with:
+          name: spaghetti.o2r
+          path: .
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          sudo apt-get remove -y cmake
+          git -C libultraship remote add nx https://github.com/Net64DD/libultraship.git
+          git -C libultraship fetch nx
+          git -C libultraship checkout nx/main-nx
+          wget https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-linux-x86_64.sh -O /tmp/cmake.sh
+          sudo sh /tmp/cmake.sh --prefix=/usr/local/ --exclude-subdir
+          wget https://github.com/leethomason/tinyxml2/archive/refs/tags/10.0.0.tar.gz
+          tar -xzf 10.0.0.tar.gz
+          cd tinyxml2-10.0.0
+          mkdir build
+          cd build
+          cmake -H.. -B. -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake
+          make
+          sudo make install
+          cd ../..
+          cmake -H. -Bbuild-switch -GNinja -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+          cmake --build build-switch --config ${{ matrix.config }} -j3
+          wget -O gamecontrollerdb.txt https://raw.githubusercontent.com/mdqinc/SDL_GameControllerDB/master/gamecontrollerdb.txt
+          mv README.md readme.txt
+          mv build-switch/*.nro Spaghettify.nro
+      - name: Upload build
+        if: matrix.config == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Spaghettify-switch
+          path: |
+            Spaghettify.nro
+            spaghetti.o2r
+            
