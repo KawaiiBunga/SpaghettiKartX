@@ -13,7 +13,7 @@
 *.opendb
 
 # Build Outputs & Intermediate Files
-x64/
+
 x86/
 ARM/
 ARM64/
