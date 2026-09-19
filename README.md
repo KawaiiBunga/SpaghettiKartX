@@ -11,7 +11,7 @@
 > **This is a community port of the [original SpaghettiKart PC port](https://github.com/HarbourMasters/SpaghettiKart) specifically geared towards an Xbox One and Xbox Series X|S release via UWP (Universal Windows Platform) in Developer Mode.**  
 > Please **DO NOT** open issues on the upstream SpaghettiKart repository or Harbour Masters repositories for any bugs, crashes, or issues you encounter while using or building this Xbox port. Direct all Xbox-related issues to this repository's issue tracker.
 
-**SpaghettiKartX** brings the Harbour Masters SpaghettiKart project — a native PC port of **Mario Kart 64** — to the **Xbox One**, **Xbox Series S**, and **Xbox Series X** family of consoles. It leverages the [n64-decomp/mariokart64](https://github.com/n64-decomp/mariokart64) decompilation, using [libultraship](https://github.com/Kenix3/libultraship) alongside Mesa Gallium OpenGL translation over DirectX 12 for console-native rendering, low-latency SDL2 audio, and native controller input.
+**SpaghettiKartX** brings the Harbour Masters SpaghettiKart project â€” a native PC port of **Mario Kart 64** â€” to the **Xbox One**, **Xbox Series S**, and **Xbox Series X** family of consoles. It leverages the [n64-decomp/mariokart64](https://github.com/n64-decomp/mariokart64) decompilation, using [libultraship](https://github.com/Kenix3/libultraship) alongside Mesa Gallium OpenGL translation over DirectX 12 for console-native rendering, low-latency SDL2 audio, and native controller input.
 
 Runs natively on **Xbox One**, **Xbox One S/X**, **Xbox Series S**, and **Xbox Series X** via Xbox Developer Mode.
 
@@ -44,7 +44,7 @@ The application includes an integrated, controller-driven **Boot Menu** that aut
 2. If `mk64.o2r` has not yet been generated, the **SpaghettiKart Boot Menu** will appear.
 3. Place your `Mario Kart 64 (USA).z64` ROM file into `D:\SpaghettiKart\` (via the Device Portal File Explorer under `DevelopmentFiles`) or on an external USB flash drive (`E:\SpaghettiKart\`).
 4. Select your ROM and storage destination using the Xbox controller, then choose **Extract**.
-5. The extractor will verify your ROM checksum and compile `mk64.o2r` directly on the console (typically takes 1–2 minutes).
+5. The extractor will verify your ROM checksum and compile `mk64.o2r` directly on the console (typically takes 1â€“2 minutes).
 6. Once extraction completes, select **Launch Game** to jump straight to the title screen!
 
 ---
@@ -140,3 +140,6 @@ All port enhancements, cheats, gameplay tweaks, and audio controls are accessibl
 - **Harbour Masters & Kenix3**: Creators of [SpaghettiKart](https://github.com/HarbourMasters/SpaghettiKart) and [libultraship](https://github.com/Kenix3/libultraship).
 - **mk64 Decomp Team**: For the reverse engineering and decompilation of [Mario Kart 64](https://github.com/n64-decomp/mariokart64).
 - **SternXD & worleydl**: For the UWP Xbox porting foundation and boot menu architecture from [2Ship2Harkinian-UWP](https://github.com/SternXD/2ship2harkinian-uwp).
+
+## Like what I do?
+I love what I do and want to keep sharing it with the world. You can directly support me and my projects here: https://ko-fi.com/kawaiibunga
